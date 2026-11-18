@@ -1,0 +1,35 @@
+# Runs `alembic upgrade head` before a rollout. Jobs are immutable, so delete the previous one first
+# (the release workflow does: kubectl delete job docchat-migrate --ignore-not-found).
+# Existing database created by Phase 1-3 (create_all)? Run ONCE:  alembic stamp head
+# (e.g. kubectl -n docchat run stamp --rm -it --image=<backend image> --overrides=... -- alembic stamp head)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: docchat-migrate
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: docchat-migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: docchat-backend
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef: {name: docchat-config}
+            - secretRef: {name: docchat-secrets}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}

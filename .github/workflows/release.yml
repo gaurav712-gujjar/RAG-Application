@@ -1,0 +1,105 @@
+name: Release
+
+# Tag a release (git tag v1.2.3 && git push --tags) to build and publish images to GHCR.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt
+      - run: pytest -q
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        include:
+          - name: backend
+            context: backend
+            # Bake model weights in (~4 GB larger image) so pods start fast and don't need Hugging Face at boot.
+            build_args: |
+              PRELOAD_MODELS=${{ vars.PRELOAD_MODELS || 'false' }}
+          - name: frontend
+            context: frontend
+            # NEXT_PUBLIC_* is compiled into the JS bundle: set this repository variable to your public API URL.
+            build_args: |
+              NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  deploy:
+    # Opt-in: set repository variable DEPLOY_ENABLED=true, add a KUBE_CONFIG secret (base64 kubeconfig)
+    # and create a "production" environment (add required reviewers there for a manual approval gate).
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+      - name: Set image tags
+        working-directory: deploy/k8s
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          kustomize edit set image docchat-backend=${IMAGE_PREFIX}/backend:${VERSION}
+          kustomize edit set image docchat-frontend=${IMAGE_PREFIX}/frontend:${VERSION}
+      - name: Run database migration first, then roll out
+        run: |
+          kubectl -n docchat delete job docchat-migrate --ignore-not-found
+          kubectl apply -k deploy/k8s
+          kubectl -n docchat wait --for=condition=complete job/docchat-migrate --timeout=300s
+          kubectl -n docchat rollout status deploy/docchat-api --timeout=600s
+          kubectl -n docchat rollout status deploy/docchat-worker --timeout=600s
+          kubectl -n docchat rollout status deploy/docchat-frontend --timeout=300s

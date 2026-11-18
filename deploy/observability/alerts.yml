@@ -1,0 +1,65 @@
+groups:
+  - name: docchat
+    rules:
+      - alert: ScrapeTargetDown
+        expr: up{job=~"docchat-.*"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.job }} is not being scraped"
+          description: "Prometheus cannot reach {{ $labels.instance }}. The service may be down or crash-looping."
+
+      - alert: HighHttp5xxRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.05
+          and sum(rate(http_requests_total[5m])) > 0.05
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "More than 5% of API requests are failing with 5xx"
+
+      # /chat streams with HTTP 200 even when the answer fails, so errors are counted by outcome.
+      - alert: ChatAnswerFailures
+        expr: |
+          sum(rate(chat_requests_total{outcome=~"error|llm_unavailable"}[5m])) / sum(rate(chat_requests_total[5m])) > 0.05
+          and sum(rate(chat_requests_total[5m])) > 0.02
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "More than 5% of chat answers fail (error or LLM unavailable)"
+
+      - alert: LLMProviderUnavailable
+        expr: sum(increase(chat_requests_total{outcome="llm_unavailable"}[5m])) > 3
+        labels: {severity: warning}
+        annotations:
+          summary: "Groq is failing or rate-limiting: several chats could not be answered"
+
+      - alert: SlowTimeToFirstToken
+        expr: histogram_quantile(0.95, sum by (le) (rate(chat_ttft_seconds_bucket{source="llm"}[10m]))) > 3
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "p95 time-to-first-token is above 3 s"
+          description: "Check retrieval/rerank latency panels first, then the LLM provider."
+
+      - alert: RedisUnavailable
+        expr: sum(increase(redis_unavailable_total[5m])) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Redis errors: cache, token quota and rate limiting are being skipped"
+          description: "These features fail open, so the app still works but cost and abuse protection are off."
+
+      - alert: RerankerFailing
+        expr: sum(increase(reranker_fallbacks_total[15m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "Reranker errors; search is falling back to dense scores (lower answer quality)"
+
+      - alert: DocumentIngestionFailing
+        expr: |
+          sum(increase(documents_ingested_total{status="failed"}[1h])) / sum(increase(documents_ingested_total[1h])) > 0.3
+          and sum(increase(documents_ingested_total[1h])) >= 5
+        labels: {severity: warning}
+        annotations:
+          summary: "More than 30% of documents failed ingestion in the last hour"

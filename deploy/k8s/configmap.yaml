@@ -1,0 +1,25 @@
+# Non-secret settings. Anything containing a credential belongs in the docchat-secrets Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: docchat-config
+data:
+  LOG_FORMAT: "json"
+  LOG_LEVEL: "INFO"
+  INGEST_MODE: "celery"
+  DB_AUTO_CREATE: "false"          # schema is owned by Alembic (docchat-migrate Job)
+  STORAGE_BACKEND: "s3"
+  S3_BUCKET: "docchat"
+  S3_REGION: "us-east-1"
+  # S3_ENDPOINT: ""                # leave unset for AWS S3; set for MinIO / other S3-compatible storage
+  QDRANT_URL: "https://YOUR-CLUSTER.qdrant.io:6333"
+  EMBEDDING_MODEL: "BAAI/bge-m3"
+  RERANK_ENABLED: "true"
+  CORS_ORIGINS: "https://docchat.example.com"
+  DAILY_TOKEN_QUOTA: "50000"
+  WORKER_METRICS_PORT: "9100"
+  # uvicorn trusts X-Forwarded-For only from these addresses. "*" is acceptable ONLY because the
+  # api is reachable solely through the ingress controller (ClusterIP service, no NodePort/LB).
+  FORWARDED_ALLOW_IPS: "*"
+  # Tracing (optional). Langfuse / Tempo / any OTLP endpoint; put credentials headers in the Secret.
+  # OTEL_EXPORTER_OTLP_ENDPOINT: "https://cloud.langfuse.com/api/public/otel"

@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: docchat
+    folder: DocChat
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

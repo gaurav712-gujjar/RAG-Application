@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docchat-worker
+  labels: {app.kubernetes.io/name: docchat-worker}
+spec:
+  replicas: 1                                # scale by replicas, not --concurrency (metrics port, model memory)
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 0}
+  selector:
+    matchLabels: {app.kubernetes.io/name: docchat-worker}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: docchat-worker}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: "/metrics"
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120     # finish the current document before exiting (SIGTERM = warm shutdown)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          image: docchat-backend
+          command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=INFO", "--concurrency=1"]
+          ports:
+            - {name: metrics, containerPort: 9100}
+          envFrom:
+            - configMapRef: {name: docchat-config}
+            - secretRef: {name: docchat-secrets}
+          # No HTTP endpoint: use Celery's own ping as the liveness check.
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "celery -A app.workers.celery_app inspect ping -d celery@$HOSTNAME --timeout 10"]
+            initialDelaySeconds: 120
+            periodSeconds: 60
+            timeoutSeconds: 20
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          # Embedding model + OCR (tesseract/poppler) but no reranker.
+          resources:
+            requests: {cpu: "1", memory: 3Gi}
+            limits: {memory: 5Gi}

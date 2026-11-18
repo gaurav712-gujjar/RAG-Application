@@ -1,0 +1,32 @@
+# Two hosts: the web app and the API (NEXT_PUBLIC_API_URL must be https://api.docchat.example.com,
+# baked into the frontend image at build time). Replace the hosts and TLS secret.
+# Only the API's public routes are exposed: /metrics is deliberately NOT routed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: docchat
+  annotations:
+    # SSE (token streaming) needs buffering off and long timeouts, or answers arrive in one lump.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # MAX_UPLOAD_MB is 25; leave headroom for multipart overhead.
+    nginx.ingress.kubernetes.io/proxy-body-size: "27m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [docchat.example.com, api.docchat.example.com]
+      secretName: docchat-tls
+  rules:
+    - host: docchat.example.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: docchat-frontend, port: {number: 3000}}}}
+    - host: api.docchat.example.com
+      http:
+        paths:
+          - {path: /auth, pathType: Prefix, backend: {service: {name: docchat-api, port: {number: 8000}}}}
+          - {path: /documents, pathType: Prefix, backend: {service: {name: docchat-api, port: {number: 8000}}}}
+          - {path: /chat, pathType: Prefix, backend: {service: {name: docchat-api, port: {number: 8000}}}}
+          - {path: /usage, pathType: Prefix, backend: {service: {name: docchat-api, port: {number: 8000}}}}
+          - {path: /health, pathType: Exact, backend: {service: {name: docchat-api, port: {number: 8000}}}}

@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docchat-api
+  labels: {app.kubernetes.io/name: docchat-api}
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}   # new pod must be ready (models loaded) before an old one goes
+  selector:
+    matchLabels: {app.kubernetes.io/name: docchat-api}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: docchat-api}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60     # let in-flight SSE answers finish
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: docchat-api}
+      containers:
+        - name: api
+          image: docchat-backend
+          ports:
+            - {name: http, containerPort: 8000}
+          envFrom:
+            - configMapRef: {name: docchat-config}
+            - secretRef: {name: docchat-secrets}
+          env:
+            - {name: OTEL_SERVICE_NAME, value: docchat-api}
+          # Loading bge-m3 + the reranker takes minutes (and downloads ~4 GB if the image was not built
+          # with PRELOAD_MODELS=true). The startup probe holds off liveness checks for up to 15 min.
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec: {command: ["sleep", "5"]}   # give the load balancer time to stop sending traffic
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          # Estimates: bge-m3 + bge-reranker-v2-m3 are ~2.3 GB each in fp32. Watch real usage and tune.
+          resources:
+            requests: {cpu: "1", memory: 6Gi}
+            limits: {memory: 8Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docchat-api
+spec:
+  selector: {app.kubernetes.io/name: docchat-api}
+  ports:
+    - {name: http, port: 8000, targetPort: http}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: docchat-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: docchat-api}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: docchat-api
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: docchat-api}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 120      # new pods take minutes to load models: don't flap
+    scaleDown:
+      stabilizationWindowSeconds: 600

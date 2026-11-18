@@ -1,0 +1,10 @@
+# Evaluation extras: `pip install -r requirements-eval.txt` (kept out of the runtime image on purpose).
+# RAGAS and LangChain break each other often. These pins are the combination that was verified to
+# import together (ragas 0.3.9 needs the langchain 0.3 line; langchain-community 0.4 removed a module
+# it imports). Re-test before bumping any of them.
+-r requirements.txt
+ragas==0.3.9
+langchain>=0.3,<1
+langchain-core>=0.3,<1
+langchain-community>=0.3,<0.4
+langchain-groq>=0.3,<1
