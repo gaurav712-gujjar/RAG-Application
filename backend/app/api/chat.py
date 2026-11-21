@@ -107,6 +107,7 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
                 return
 
             history = trim_history(req.history, settings.history_turns)
+            yield sse("stage", {"name": "searching"})  # instant feedback while we embed/search/rerank
 
             search_query = retrieval_query(req.question, history)  # cheap heuristic fallback
             if settings.rewrite_enabled and needs_rewrite(req.question, history):
@@ -129,6 +130,7 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
                 for i, h in enumerate(r.hits, start=1)
             ]
             yield sse("sources", sources)
+            breakdown = {"embed_ms": round(r.embed_ms, 1), "search_ms": round(r.search_ms, 1)}
 
             # Nothing relevant: skip the LLM entirely (saves tokens and avoids hallucination).
             if not r.hits:
@@ -139,12 +141,13 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
                 yield sse("token", {"t": NOT_FOUND})
                 yield sse(
                     "done",
-                    {"ttft_ms": ttft_ms, "retrieval_ms": retrieval_ms, "rerank_ms": rerank_ms,
+                    {"ttft_ms": ttft_ms, "retrieval_ms": retrieval_ms, "rerank_ms": rerank_ms, **breakdown,
                      "total_ms": _ms(t0), "model": None, "prompt_tokens": 0, "completion_tokens": 0,
                      "cached": False},
                 )
                 return
 
+            yield sse("stage", {"name": "writing"})
             model = choose_model(req.question, settings)
             messages = build_messages(req.question, r.hits, history)
             est_prompt = _est_tokens(sum(len(m["content"]) for m in messages))
@@ -206,7 +209,7 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
             )
             yield sse(
                 "done",
-                {"ttft_ms": ttft_ms, "retrieval_ms": retrieval_ms, "rerank_ms": rerank_ms,
+                {"ttft_ms": ttft_ms, "retrieval_ms": retrieval_ms, "rerank_ms": rerank_ms, **breakdown,
                  "total_ms": total_ms, "model": model, "prompt_tokens": prompt_tokens,
                  "completion_tokens": completion_tokens, "cached": False},
             )

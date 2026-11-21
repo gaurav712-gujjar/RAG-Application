@@ -1,18 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, Doc, deleteDoc, listDocs, uploadDoc } from "@/lib/api";
-
-const STATUS_STYLE: Record<Doc["status"], string> = {
-  uploaded: "bg-slate-100 text-slate-700",
-  processing: "bg-amber-100 text-amber-800",
-  ready: "bg-emerald-100 text-emerald-800",
-  failed: "bg-red-100 text-red-700",
-};
+import DocPipeline from "./DocPipeline";
 
 export default function UploadPanel({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [docs, setDocs] = useState<Doc[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -29,6 +25,8 @@ export default function UploadPanel({ onUnauthorized }: { onUnauthorized: () => 
       setDocs(await listDocs());
     } catch (err) {
       handle(err);
+    } finally {
+      setLoaded(true);
     }
   }, [handle]);
 
@@ -36,18 +34,19 @@ export default function UploadPanel({ onUnauthorized }: { onUnauthorized: () => 
     refresh();
   }, [refresh]);
 
-  // Poll while anything is still being processed (matters once ingestion is async in Phase 2).
+  // Poll every second while any document is still moving through the pipeline.
+  const busy = docs.some((d) => d.status === "uploaded" || d.status === "processing");
   useEffect(() => {
-    if (!docs.some((d) => d.status === "uploaded" || d.status === "processing")) return;
-    const t = setInterval(refresh, 3000);
+    if (!busy) return;
+    const t = setInterval(refresh, 1000);
     return () => clearInterval(t);
-  }, [docs, refresh]);
+  }, [busy, refresh]);
 
-  async function onFiles(files: FileList | null) {
-    if (!files?.length) return;
+  async function upload(files: File[]) {
+    if (!files.length) return;
     setUploading(true);
     setError(null);
-    for (const file of Array.from(files)) {
+    for (const file of files) {
       try {
         await uploadDoc(file);
       } catch (err) {
@@ -57,6 +56,12 @@ export default function UploadPanel({ onUnauthorized }: { onUnauthorized: () => 
     setUploading(false);
     if (inputRef.current) inputRef.current.value = "";
     refresh();
+  }
+
+  function onDrop(e: DragEvent<HTMLLabelElement>) {
+    e.preventDefault();
+    setDragging(false);
+    upload(Array.from(e.dataTransfer.files));
   }
 
   async function remove(id: string) {
@@ -69,38 +74,56 @@ export default function UploadPanel({ onUnauthorized }: { onUnauthorized: () => 
   }
 
   return (
-    <div className="flex h-full flex-col gap-3">
-      <label className="flex cursor-pointer flex-col items-center rounded-lg border-2 border-dashed border-slate-300 bg-white p-4 text-center text-sm text-slate-600 hover:border-slate-400">
-        {uploading ? "Uploading..." : "Click to upload PDF, DOCX, TXT or MD (max 25 MB)"}
+    <div className="flex h-full flex-col gap-4">
+      <label
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+        className={`flex cursor-pointer flex-col gap-1 rounded-lg border border-dashed px-4 py-5 text-sm transition-colors focus-within:outline focus-within:outline-2 focus-within:outline-done ${
+          dragging ? "border-done bg-done/10" : "border-line bg-panel hover:border-muted"
+        }`}
+      >
+        <span className="font-medium">{uploading ? "Uploading…" : "Add documents"}</span>
+        <span className="text-xs text-muted">Drop files here or click. PDF, DOCX, TXT or MD, up to 25 MB.</span>
         <input
           ref={inputRef}
           type="file"
           multiple
           accept=".pdf,.docx,.txt,.md"
-          className="hidden"
+          className="sr-only"
           disabled={uploading}
-          onChange={(e) => onFiles(e.target.files)}
+          onChange={(e) => upload(Array.from(e.target.files ?? []))}
         />
       </label>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && (
+        <p role="alert" className="text-sm text-bad">
+          {error}
+        </p>
+      )}
 
-      <ul className="flex-1 space-y-2 overflow-y-auto">
-        {docs.length === 0 && <li className="text-sm text-slate-400">No documents yet.</li>}
+      <ul className="flex-1 divide-y divide-line overflow-y-auto">
+        {loaded && docs.length === 0 && (
+          <li className="py-4 text-sm text-muted">
+            Nothing here yet. Add a file and you can watch it move from upload to ready.
+          </li>
+        )}
         {docs.map((d) => (
-          <li key={d.id} className="rounded-md border bg-white p-2 text-sm">
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate font-medium" title={d.filename}>
+          <li key={d.id} className="py-4 first:pt-0">
+            <div className="mb-2 flex items-baseline justify-between gap-3">
+              <span className="truncate text-sm font-medium" title={d.filename}>
                 {d.filename}
               </span>
-              <button onClick={() => remove(d.id)} className="text-xs text-slate-400 hover:text-red-600">
+              <button
+                onClick={() => remove(d.id)}
+                className="shrink-0 text-xs text-muted underline-offset-2 hover:text-bad hover:underline"
+              >
                 Delete
               </button>
             </div>
-            <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-              <span className={`rounded px-1.5 py-0.5 ${STATUS_STYLE[d.status]}`}>{d.status}</span>
-              {d.status === "ready" && <span>{d.num_chunks} chunks</span>}
-            </div>
-            {d.error && <p className="mt-1 text-xs text-red-600">{d.error}</p>}
+            <DocPipeline doc={d} />
           </li>
         ))}
       </ul>

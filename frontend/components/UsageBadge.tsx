@@ -15,17 +15,14 @@ export default function UsageBadge({ refreshKey }: { refreshKey: number }) {
   const limited = usage.daily_limit > 0;
   const pct = limited ? Math.min(100, (usage.used_today / usage.daily_limit) * 100) : 0;
   return (
-    <div className="flex items-center gap-2 text-xs text-slate-500" title="Tokens used today (resets 00:00 UTC)">
+    <div className="flex items-center gap-2 text-xs text-muted" title="Tokens used today. Resets at 00:00 UTC.">
       <span>
-        Tokens today: {usage.used_today.toLocaleString()}
-        {limited && ` / ${usage.daily_limit.toLocaleString()}`}
+        {usage.used_today.toLocaleString()}
+        {limited && ` of ${usage.daily_limit.toLocaleString()}`} tokens today
       </span>
       {limited && (
-        <span className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-200">
-          <span
-            className={`block h-full ${pct >= 90 ? "bg-red-500" : "bg-slate-500"}`}
-            style={{ width: `${pct}%` }}
-          />
+        <span className="h-1.5 w-16 overflow-hidden rounded-full bg-line">
+          <span className={`block h-full ${pct >= 90 ? "bg-bad" : "bg-done"}`} style={{ width: `${pct}%` }} />
         </span>
       )}
     </div>

@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     if not hasattr(app.state, "reranker"):
         reranker = None
         if settings.rerank_enabled:
-            reranker = CrossEncoderReranker(settings.reranker_model)
+            reranker = CrossEncoderReranker(settings.reranker_model, settings.rerank_max_length)
             logger.info("Loading reranker %s ...", settings.reranker_model)
             await reranker.warmup()
         app.state.reranker = reranker

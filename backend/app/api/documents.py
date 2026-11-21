@@ -14,7 +14,7 @@ from app.auth.deps import get_current_user
 from app.core.config import get_settings
 from app.core.db import SessionLocal, get_session
 from app.core.limits import limit_upload
-from app.models import DocStatus, Document, User
+from app.models import DocStage, DocStatus, Document, User
 from app.parsers.files import UnsupportedFile, detect_file_type, sanitize_filename
 from app.workers.dispatch import enqueue_ingestion
 from app.workers.pipeline import process_document
@@ -34,6 +34,8 @@ class DocOut(BaseModel):
     status: str
     error: str | None
     num_chunks: int
+    stage: str | None = None
+    timings: dict | None = None
     created_at: dt.datetime
 
 
@@ -94,7 +96,7 @@ async def upload_document(
 
     doc = Document(
         id=doc_id, user_id=user.id, filename=filename, file_type=ftype, file_hash=file_hash,
-        size_bytes=len(data), status=DocStatus.UPLOADED, storage_path=key,
+        size_bytes=len(data), status=DocStatus.UPLOADED, stage=DocStage.QUEUED, storage_path=key,
     )
     session.add(doc)
     try:

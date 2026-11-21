@@ -16,7 +16,7 @@ from app.core.storage import Storage
 from app.core.tracing import fail as fail_span
 from app.core.tracing import tracer
 from app.embeddings.embedder import Embedder
-from app.models import DocStatus, Document
+from app.models import DocStage, DocStatus, Document
 from app.ocr.tesseract import make_ocr
 from app.parsers.files import ParseError
 from app.retrieval.store import VectorStore
@@ -57,6 +57,8 @@ async def process_document(
             return  # deleted before the worker got to it, or already done
         user_id, filename, key, ftype = doc.user_id, doc.filename, doc.storage_path, doc.file_type
         doc.status = DocStatus.PROCESSING
+        doc.stage = DocStage.QUEUED
+        doc.timings = None
         doc.error = None
         await session.commit()
 
@@ -74,6 +76,17 @@ async def process_document(
             metrics.INGEST_DURATION.observe(time.perf_counter() - started)
             logger.warning("document failed", extra={"doc_id": doc_id, "reason": message})
 
+        async def progress(stage: str, timings: dict) -> None:
+            # Best effort: a failed progress write must never fail the ingestion itself.
+            try:
+                current = await session.get(Document, doc_id, populate_existing=True)
+                if current is not None and current.status == DocStatus.PROCESSING:
+                    current.stage, current.timings = stage, timings
+                    await session.commit()
+            except Exception:
+                logger.warning("could not record progress for doc %s", doc_id, exc_info=True)
+                await session.rollback()
+
         tmpdir = tempfile.mkdtemp(prefix="ingest-")
         with tracer.start_as_current_span(
             "ingest_document", attributes={"doc.id": doc_id, "user.id": user_id, "file.type": ftype}
@@ -88,6 +101,7 @@ async def process_document(
                 num_chunks = await ingest_document(
                     user_id=user_id, doc_id=doc_id, filename=filename, path=path, ftype=ftype,
                     embedder=embedder, store=store, settings=settings, ocr=page_ocr,
+                    progress=progress,
                 )
 
                 current = await session.get(Document, doc_id, populate_existing=True)
@@ -96,6 +110,7 @@ async def process_document(
                     await _cleanup(storage, store, user_id, doc_id, key)
                     return
                 current.status = DocStatus.READY
+                current.stage = DocStage.DONE
                 current.num_chunks = num_chunks
                 await session.commit()
                 span.set_attribute("doc.chunks", num_chunks)

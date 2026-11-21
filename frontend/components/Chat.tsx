@@ -8,35 +8,76 @@ type Message = {
   content: string;
   sources?: Source[];
   latency?: Latency;
+  stage?: "searching" | "writing";
+  startedAt?: number;
   error?: string;
   streaming?: boolean;
 };
 
-const sec = (ms?: number) => (ms === undefined || ms === null ? "–" : `${(ms / 1000).toFixed(2)}s`);
+const sec = (ms?: number) => (ms === undefined || ms === null ? "–" : `${(ms / 1000).toFixed(2)} s`);
+const STAGE_TEXT = { searching: "Searching your documents", writing: "Writing the answer" } as const;
 
-function LatencyBadge({ l }: { l: Latency }) {
+/** Where the time went, as one bar: each part is as wide as the time it took. */
+function Waterfall({ l }: { l: Latency }) {
+  const ttft = l.serverTtftMs ?? 0;
+  const retrieval = l.retrievalMs ?? 0;
+  const embed = l.embedMs ?? 0;
+  const search = l.searchMs ?? 0;
+  const rerank = l.rerankMs ?? 0;
+  const other = Math.max(0, retrieval - embed - search - rerank);
+  const model = Math.max(0, ttft - retrieval);
+  const stream = Math.max(0, (l.totalMs ?? ttft) - ttft);
+
+  const parts = l.cached
+    ? [{ name: "Cache", ms: ttft, cls: "bg-done" }]
+    : [
+        { name: "Embed question", ms: embed + other, cls: "bg-done" },
+        { name: "Search", ms: search, cls: "bg-done/70" },
+        { name: "Rerank", ms: rerank, cls: "bg-done/45" },
+        { name: "Model thinks", ms: model, cls: "bg-live" },
+        { name: "Streaming", ms: stream, cls: "bg-line" },
+      ].filter((p) => p.ms > 0);
+  const sum = parts.reduce((a, p) => a + p.ms, 0) || 1;
+
   return (
-    <div className="mt-2 inline-flex flex-wrap items-center gap-x-2 rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600">
-      <span>TTFT {sec(l.serverTtftMs)}</span>
-      <span>·</span>
-      <span>Retrieval {sec(l.retrievalMs)}</span>
-      <span>·</span>
-      <span>Total {sec(l.totalMs)}</span>
-      {l.cached && (
-        <>
-          <span>·</span>
-          <span className="font-medium text-emerald-700" title="Served from cache: no tokens used">
-            cached
-          </span>
-        </>
-      )}
-      {l.clientTtftMs !== undefined && (
-        <>
-          <span>·</span>
-          <span title="Measured in your browser, includes network">You saw first word in {sec(l.clientTtftMs)}</span>
-        </>
-      )}
+    <div className="mt-4 max-w-md" aria-label="Where the time went">
+      <p className="text-sm">
+        <span className="font-semibold">First word in {sec(ttft)}</span>
+        <span className="text-muted"> · total {sec(l.totalMs)}</span>
+        {l.cached && <span className="ml-2 rounded bg-done/10 px-1.5 py-0.5 text-xs text-done">from cache, no tokens used</span>}
+        {l.clientTtftMs !== undefined && !l.cached && (
+          <span className="text-muted" title="Measured in your browser, includes the network"> · you saw it at {sec(l.clientTtftMs)}</span>
+        )}
+      </p>
+      <div className="mt-2 flex h-2 gap-px overflow-hidden rounded-full">
+        {parts.map((p) => (
+          <span key={p.name} className={p.cls} style={{ width: `${(p.ms / sum) * 100}%` }} title={`${p.name}: ${Math.round(p.ms)} ms`} />
+        ))}
+      </div>
+      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+        {parts.map((p) => (
+          <li key={p.name} className="flex items-center gap-1.5">
+            <span className={`h-2 w-2 rounded-full ${p.cls}`} aria-hidden />
+            {p.name} {Math.round(p.ms)} ms
+          </li>
+        ))}
+      </ul>
     </div>
+  );
+}
+
+/** Live status while we wait for the first word, so a slow start never looks like a freeze. */
+function Waiting({ stage, startedAt }: { stage: keyof typeof STAGE_TEXT; startedAt: number }) {
+  const [now, setNow] = useState(() => performance.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(performance.now()), 100);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <p className="flex items-center gap-2 text-sm text-muted" role="status">
+      <span className="seg-live inline-block h-2 w-6 rounded-full" aria-hidden />
+      {STAGE_TEXT[stage]}… {((now - startedAt) / 1000).toFixed(1)} s
+    </p>
   );
 }
 
@@ -78,29 +119,26 @@ export default function Chat({
       .slice(-4)
       .map((m) => ({ role: m.role, content: m.content }));
 
+    const t0 = performance.now(); // client-side clock starts at send
     setInput("");
     setBusy(true);
     setMessages((all) => [
       ...all,
       { role: "user", content: question },
-      { role: "assistant", content: "", streaming: true, latency: {} },
+      { role: "assistant", content: "", streaming: true, latency: {}, stage: "searching", startedAt: t0 },
     ]);
 
-    const t0 = performance.now(); // client-side clock starts at send
     abortRef.current = new AbortController();
     try {
       for await (const { event, data } of streamChat(question, history, abortRef.current.signal)) {
-        if (event === "sources") {
+        if (event === "stage") {
+          patchLast((m) => ({ ...m, stage: data.name }));
+        } else if (event === "sources") {
           patchLast((m) => ({ ...m, sources: data }));
         } else if (event === "ttft") {
           patchLast((m) => ({
             ...m,
-            latency: {
-              ...m.latency,
-              serverTtftMs: data.ttft_ms,
-              retrievalMs: data.retrieval_ms,
-              cached: data.cached,
-            },
+            latency: { ...m.latency, serverTtftMs: data.ttft_ms, retrievalMs: data.retrieval_ms, cached: data.cached },
           }));
         } else if (event === "token") {
           const first = performance.now() - t0;
@@ -113,7 +151,15 @@ export default function Chat({
           patchLast((m) => ({
             ...m,
             streaming: false,
-            latency: { ...m.latency, totalMs: data.total_ms, serverTtftMs: data.ttft_ms ?? m.latency?.serverTtftMs },
+            latency: {
+              ...m.latency,
+              totalMs: data.total_ms,
+              serverTtftMs: data.ttft_ms ?? m.latency?.serverTtftMs,
+              retrievalMs: data.retrieval_ms ?? m.latency?.retrievalMs,
+              embedMs: data.embed_ms,
+              searchMs: data.search_ms,
+              rerankMs: data.rerank_ms,
+            },
           }));
         } else if (event === "error") {
           patchLast((m) => ({ ...m, streaming: false, error: data.message }));
@@ -133,55 +179,73 @@ export default function Chat({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex-1 space-y-4 overflow-y-auto p-4">
-        {messages.length === 0 && (
-          <p className="mt-10 text-center text-sm text-slate-400">
-            Upload a document, then ask a question about it.
-          </p>
-        )}
-        {messages.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
-            <div
-              className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
-                m.role === "user" ? "bg-slate-900 text-white" : "border bg-white"
-              }`}
-            >
-              <p className="whitespace-pre-wrap">
-                {m.content || (m.streaming && !m.error ? <span className="text-slate-400">Thinking…</span> : "")}
+      <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
+        <div className="mx-auto max-w-2xl space-y-8">
+          {messages.length === 0 && (
+            <div className="pt-16">
+              <h2 className="text-2xl font-semibold tracking-tight">Ask your documents anything.</h2>
+              <p className="mt-2 max-w-md text-muted">
+                Answers come only from your files and cite the page they came from. If the files don’t cover it, you’ll be told.
               </p>
-              {m.error && <p className="mt-1 text-red-600">{m.error}</p>}
-              {m.role === "assistant" && citedSources(m).length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {citedSources(m).map((s) => (
-                    <span key={s.n} className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700">
-                      [{s.n}] {s.filename} · p{s.page}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {m.role === "assistant" && m.latency && m.latency.serverTtftMs !== undefined && (
-                <LatencyBadge l={m.latency} />
-              )}
             </div>
-          </div>
-        ))}
-        <div ref={bottomRef} />
+          )}
+          {messages.map((m, i) =>
+            m.role === "user" ? (
+              <div key={i} className="flex justify-end">
+                <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-ink px-4 py-2.5 text-sm text-panel">
+                  {m.content}
+                </p>
+              </div>
+            ) : (
+              <div key={i} className="border-l-2 border-done pl-4">
+                {!m.content && m.streaming && !m.error && m.stage && m.startedAt !== undefined && (
+                  <Waiting stage={m.stage} startedAt={m.startedAt} />
+                )}
+                {m.content && (
+                  <p className="whitespace-pre-wrap text-[15px] leading-7">
+                    {m.content}
+                    {m.streaming && <span className="caret ml-0.5 inline-block h-4 w-0.5 translate-y-0.5 bg-ink" aria-hidden />}
+                  </p>
+                )}
+                {m.error && (
+                  <p role="alert" className="text-sm text-bad">
+                    {m.error}
+                  </p>
+                )}
+                {citedSources(m).length > 0 && (
+                  <ul className="mt-3 flex flex-wrap gap-1.5">
+                    {citedSources(m).map((s) => (
+                      <li key={s.n} className="rounded-md border border-line bg-panel px-2 py-1 text-xs">
+                        <span className="font-semibold text-done">[{s.n}]</span> {s.filename}, page {s.page}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {m.latency && m.latency.serverTtftMs !== undefined && !m.streaming && <Waterfall l={m.latency} />}
+              </div>
+            ),
+          )}
+          <div ref={bottomRef} />
+        </div>
       </div>
 
-      <form onSubmit={send} className="flex gap-2 border-t bg-white p-3">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          maxLength={2000}
-          placeholder="Ask about your documents…"
-          className="flex-1 rounded-md border px-3 py-2 text-sm"
-        />
-        <button
-          disabled={busy || !input.trim()}
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
-          Send
-        </button>
+      <form onSubmit={send} className="border-t border-line bg-panel px-4 py-3 md:px-10">
+        <div className="mx-auto flex max-w-2xl gap-2">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            maxLength={2000}
+            aria-label="Your question"
+            placeholder="Ask about your documents"
+            className="min-w-0 flex-1 rounded-lg border border-line bg-white px-3.5 py-2.5 text-sm placeholder:text-muted"
+          />
+          <button
+            disabled={busy || !input.trim()}
+            className="rounded-lg bg-ink px-5 py-2.5 text-sm font-medium text-panel transition-opacity disabled:opacity-40"
+          >
+            {busy ? "Answering" : "Ask"}
+          </button>
+        </div>
       </form>
     </div>
   );

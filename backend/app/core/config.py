@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     reranker_model: str = "BAAI/bge-reranker-v2-m3"  # multilingual cross-encoder
     # With the reranker on, the threshold applies to its 0-1 score; otherwise to dense cosine.
     rerank_threshold: float = 0.2
+    # Latency knobs: the reranker reads every candidate in full, so fewer and shorter = faster (esp. on CPU)
+    rerank_candidates: int = 6  # only the best N hybrid candidates go to the reranker
+    rerank_max_length: int = 384  # tokens per (query, passage) pair; chunks beyond this are truncated
     rewrite_enabled: bool = True  # LLM rewrite of follow-up questions into standalone queries
 
     # --- cache / quota / rate limits (all need Redis; they fail open if Redis is down) ---

@@ -17,6 +17,8 @@ class Retrieval:
     hits: list[Hit]
     retrieval_ms: float  # embed + search + rerank
     rerank_ms: float = 0.0
+    embed_ms: float = 0.0
+    search_ms: float = 0.0
 
 
 async def retrieve(
@@ -37,6 +39,8 @@ async def retrieve(
     with tracer.start_as_current_span("retrieval", context=otel_ctx) as span:
         with tracer.start_as_current_span("embed_query"):
             vector = (await embedder.embed([query]))[0]
+        embed_ms = (time.perf_counter() - t0) * 1000
+        t_search = time.perf_counter()
         with tracer.start_as_current_span("vector_search") as s:
             s.set_attribute("search.hybrid", settings.hybrid_enabled)
             if settings.hybrid_enabled:
@@ -44,10 +48,12 @@ async def retrieve(
             else:
                 candidates = await store.search(user_id, vector, settings.retrieve_top_k)
             s.set_attribute("search.candidates", len(candidates))
+        search_ms = (time.perf_counter() - t_search) * 1000
 
         threshold = settings.relevance_threshold
         rerank_ms = 0.0
         if reranker is not None and candidates:
+            candidates = candidates[: settings.rerank_candidates]  # fused order: best first
             t1 = time.perf_counter()
             with tracer.start_as_current_span("rerank") as s:
                 try:
@@ -69,4 +75,5 @@ async def retrieve(
         span.set_attribute("retrieval.hits", len(hits))
         if hits:
             span.set_attribute("retrieval.top_score", round(hits[0].score, 4))
-    return Retrieval(hits=hits, retrieval_ms=retrieval_ms, rerank_ms=rerank_ms)
+    return Retrieval(hits=hits, retrieval_ms=retrieval_ms, rerank_ms=rerank_ms,
+                     embed_ms=embed_ms, search_ms=search_ms)

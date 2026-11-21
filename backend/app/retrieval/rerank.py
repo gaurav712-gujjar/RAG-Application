@@ -56,4 +56,5 @@ class CrossEncoderReranker:
         return await asyncio.to_thread(self._predict, query, texts)
 
     async def warmup(self) -> None:
-        await asyncio.to_thread(self._load)
+        """Load AND run once: the first real inference is much slower (lazy init, thread pools)."""
+        await asyncio.to_thread(self._predict, "warm up", ["warm up passage"])

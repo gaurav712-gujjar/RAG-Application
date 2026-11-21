@@ -1,7 +1,7 @@
 import datetime as dt
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -20,6 +20,17 @@ class DocStatus:
     PROCESSING = "processing"
     READY = "ready"
     FAILED = "failed"
+
+
+class DocStage:
+    """Where a document is inside the pipeline (finer than `status`; shown in the UI)."""
+
+    QUEUED = "queued"
+    PARSING = "parsing"  # read the file; OCR for scanned pages happens here
+    SPLITTING = "splitting"
+    EMBEDDING = "embedding"
+    INDEXING = "indexing"
+    DONE = "done"
 
 
 class User(Base):
@@ -45,4 +56,7 @@ class Document(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     num_chunks: Mapped[int] = mapped_column(Integer, default=0)
     storage_path: Mapped[str] = mapped_column(String(512))
+    stage: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # milliseconds per finished stage, e.g. {"parse_ms": 120, "pages": 12, "chunks": 30}
+    timings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

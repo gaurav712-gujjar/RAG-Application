@@ -2,7 +2,52 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bg: 232 237 236;
+  --panel: 249 251 250;
+  --ink: 16 39 43;
+  --muted: 91 111 115;
+  --line: 203 214 214;
+  --done: 11 110 110;
+  --live: 229 154 0;
+  --bad: 192 57 43;
+}
+
 html,
 body {
   height: 100%;
+}
+
+body {
+  font-variant-numeric: tabular-nums; /* timings line up and don't jitter while they tick */
+}
+
+:focus-visible {
+  outline: 2px solid rgb(var(--done));
+  outline-offset: 2px;
+}
+
+/* The one animated thing: the segment of the step that is running right now. */
+@keyframes sweep {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.seg-live {
+  background-image: linear-gradient(90deg, rgb(var(--live)) 0%, rgb(255 214 122) 50%, rgb(var(--live)) 100%);
+  background-size: 200% 100%;
+  animation: sweep 1.6s linear infinite;
+}
+.seg-fill {
+  transition: background-color 0.4s ease;
+}
+@keyframes blink {
+  50% { opacity: 0.25; }
+}
+.caret {
+  animation: blink 1s steps(2) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seg-live { animation: none; background-image: none; background-color: rgb(var(--live)); }
+  .caret { animation: none; }
 }

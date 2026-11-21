@@ -43,4 +43,5 @@ class SentenceTransformerEmbedder:
         return await asyncio.to_thread(self._encode, texts)
 
     async def warmup(self) -> None:
-        await asyncio.to_thread(self._load)
+        """Load AND run once, so the first user question does not pay the cold-start cost."""
+        await asyncio.to_thread(self._encode, ["warm up"])
