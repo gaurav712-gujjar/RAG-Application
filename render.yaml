@@ -45,7 +45,7 @@ services:
       - key: EMBEDDING_DIM
         value: "384"
       - key: QDRANT_COLLECTION
-        value: chunks_small
+        value: chunks_fastembed
       - key: RERANK_ENABLED
         value: "false"
       - key: REWRITE_ENABLED
@@ -57,7 +57,7 @@ services:
       - key: CONTEXT_TOP_N
         value: "5"
       - key: RELEVANCE_THRESHOLD
-        value: "0.05"
+        value: "0.15"
       - key: OCR_ENABLED
         value: "false"
       - key: LOG_FORMAT
