@@ -23,15 +23,24 @@ export type Doc = {
   status: "uploaded" | "processing" | "ready" | "failed";
   error: string | null;
   num_chunks: number;
+  stage: string | null;
+  timings: Record<string, number> | null;
   created_at: string;
 };
 
 export type Source = { n: number; filename: string; page: number; doc_id: string; score: number };
 
+export type Considered = { filename: string; page: number; score: number; kept: boolean };
+
 export type Latency = {
   serverTtftMs?: number;
   clientTtftMs?: number;
   retrievalMs?: number;
+  prepMs?: number;
+  embedMs?: number;
+  searchMs?: number;
+  rerankMs?: number;
+  considered?: Considered[];
   totalMs?: number;
   cached?: boolean;
 };

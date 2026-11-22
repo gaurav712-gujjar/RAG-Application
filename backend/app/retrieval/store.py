@@ -25,6 +25,8 @@ class Hit:
     chunk_index: int
     dense_score: float = 0.0
     rerank_score: float | None = None
+    sparse_score: float = 0.0  # BM25 score from the keyword leg (0 if it did not match)
+    sparse_rank: int | None = None  # 0 = best keyword match
 
 
 def user_filter(user_id: str, doc_id: str | None = None) -> models.Filter:
@@ -138,6 +140,9 @@ class VectorStore:
         if sparse_q.indices:  # a query made only of stopwords has no keyword leg
             legs.append(self.client.query_points(self.collection, query=sparse_q, using=SPARSE, **common))
         results = await asyncio.gather(*legs)
+        keyword = {}  # point id -> (rank, bm25 score) from the keyword leg
+        if sparse_q.indices:
+            keyword = {str(p.id): (i, p.score) for i, p in enumerate(results[1].points)}
 
         points = {}
         rankings = []
@@ -147,9 +152,13 @@ class VectorStore:
                 points.setdefault(str(p.id), p)
         fused = rrf(rankings)
         ordered = sorted(fused, key=fused.get, reverse=True)[:top_k]
-        return [
-            self._hit(points[pid], _cosine(vector, points[pid].vector[DENSE])) for pid in ordered
-        ]
+        hits = []
+        for pid in ordered:
+            hit = self._hit(points[pid], _cosine(vector, points[pid].vector[DENSE]))
+            if pid in keyword:
+                hit.sparse_rank, hit.sparse_score = keyword[pid][0], float(keyword[pid][1])
+            hits.append(hit)
+        return hits
 
     async def delete_document(self, user_id: str, doc_id: str) -> None:
         await self.client.delete(

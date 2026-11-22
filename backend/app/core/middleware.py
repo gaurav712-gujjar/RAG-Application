@@ -29,6 +29,7 @@ class ObservabilityMiddleware:
         request_id = new_request_id(incoming)
         token = request_id_var.set(request_id)
         start = time.perf_counter()
+        scope.setdefault("state", {})["t0"] = start  # chat reads this so TTFT includes auth + rate limit
         status_code = 500  # if the app raises before responding, that is what the client gets
 
         async def send_wrapper(message: Message) -> None:

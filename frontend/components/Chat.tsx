@@ -25,12 +25,14 @@ function Waterfall({ l }: { l: Latency }) {
   const search = l.searchMs ?? 0;
   const rerank = l.rerankMs ?? 0;
   const other = Math.max(0, retrieval - embed - search - rerank);
-  const model = Math.max(0, ttft - retrieval);
+  const prep = l.prepMs ?? 0;
+  const model = Math.max(0, ttft - retrieval - prep);
   const stream = Math.max(0, (l.totalMs ?? ttft) - ttft);
 
   const parts = l.cached
     ? [{ name: "Cache", ms: ttft, cls: "bg-done" }]
     : [
+        { name: "Checks", ms: prep, cls: "bg-muted" },
         { name: "Embed question", ms: embed + other, cls: "bg-done" },
         { name: "Search", ms: search, cls: "bg-done/70" },
         { name: "Rerank", ms: rerank, cls: "bg-done/45" },
@@ -84,9 +86,12 @@ function Waiting({ stage, startedAt }: { stage: keyof typeof STAGE_TEXT; started
 /** Show chips only for sources the answer actually cites; fall back to all if none are cited. */
 function citedSources(m: Message): Source[] {
   const all = m.sources ?? [];
-  const cited = new Set([...m.content.matchAll(/\[(\d+)\]/g)].map((x) => Number(x[1])));
+  // Models sometimes write 【1】 (full-width brackets) in Hindi answers, so accept both styles.
+  const cited = new Set([...m.content.matchAll(/[\[【](\d+)[\]】]/g)].map((x) => Number(x[1])));
   const picked = all.filter((s) => cited.has(s.n));
-  return picked.length ? picked : m.content.startsWith("Not found") ? [] : all;
+  if (picked.length) return picked;
+  // No citation in the text: show only the best match, not every retrieved file.
+  return m.content.startsWith("Not found") ? [] : all.slice(0, 1);
 }
 
 export default function Chat({
@@ -156,9 +161,11 @@ export default function Chat({
               totalMs: data.total_ms,
               serverTtftMs: data.ttft_ms ?? m.latency?.serverTtftMs,
               retrievalMs: data.retrieval_ms ?? m.latency?.retrievalMs,
+              prepMs: data.prep_ms,
               embedMs: data.embed_ms,
               searchMs: data.search_ms,
               rerankMs: data.rerank_ms,
+              considered: data.considered,
             },
           }));
         } else if (event === "error") {
@@ -220,6 +227,18 @@ export default function Chat({
                       </li>
                     ))}
                   </ul>
+                )}
+                {m.content.startsWith("Not found") && !m.streaming && (m.latency?.considered?.length ?? 0) > 0 && (
+                  <details className="mt-3 text-xs text-muted">
+                    <summary className="cursor-pointer">Closest passages the search looked at</summary>
+                    <ul className="mt-1.5 space-y-0.5">
+                      {m.latency!.considered!.map((c, k) => (
+                        <li key={k}>
+                          {c.filename}, page {c.page}: score {c.score.toFixed(2)} {c.kept ? "(sent to the model)" : "(too low)"}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
                 )}
                 {m.latency && m.latency.serverTtftMs !== undefined && !m.streaming && <Waterfall l={m.latency} />}
               </div>

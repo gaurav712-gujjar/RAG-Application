@@ -20,12 +20,28 @@ AVG_DOC_TOKENS = 300.0  # typical chunk length; only used for length normalisati
 _TOKEN = re.compile(r"[\wऀ-෿ً-ٟ]+", re.UNICODE)
 _STOP = frozenset(
     "a an the is are was were be been of to in on at for and or not it its this that these those "
-    "as by with from what how do does did i my me can will".split()
+    "as by with from what how do does did i my me can will "
+    # Hinglish (romanised Hindi) filler
+    "hai hain ho hota hoti hote tha thi the ka ki ke ko me mein se par pe kya kab kitna kitne kitni "
+    "kaise kaun kahan kyon aur ya bhi nahi nahin to toh ye yeh vo wo woh mera meri mere aap kuch "
+    "ek is us in un liye "
+    # Devanagari filler
+    "है हैं हो होता होती होते था थी थे का की के को में से पर क्या कब कितना कितने कितनी कैसे कौन कहाँ "
+    "क्यों और या भी नहीं तो यह ये वह वो मेरा मेरी मेरे आप कुछ एक इस उस इन उन लिए".split()
 )
 
 
+def _singular(t: str) -> str:
+    """Tiny stemmer: 'refunds' -> 'refund', 'days' -> 'day'. Plain English plurals only, so a query
+    word still matches its plural in the document (no stemming library, same rule at index time)."""
+    if len(t) > 3 and t.endswith("s") and not t.endswith("ss") and t.isascii() and t.isalpha():
+        return t[:-1]
+    return t
+
+
 def tokenize(text: str) -> list[str]:
-    return [t for t in _TOKEN.findall(text.lower()) if t not in _STOP and len(t) > 1 or t.isdigit()]
+    tokens = [t for t in _TOKEN.findall(text.lower()) if t not in _STOP and len(t) > 1 or t.isdigit()]
+    return [_singular(t) for t in tokens]
 
 
 def _token_id(token: str) -> int:

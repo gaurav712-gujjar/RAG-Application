@@ -19,6 +19,7 @@ class Retrieval:
     rerank_ms: float = 0.0
     embed_ms: float = 0.0
     search_ms: float = 0.0
+    considered: list[Hit] = None  # every candidate, best first, before the threshold
 
 
 async def retrieve(
@@ -51,6 +52,7 @@ async def retrieve(
         search_ms = (time.perf_counter() - t_search) * 1000
 
         threshold = settings.relevance_threshold
+        reranked = False
         rerank_ms = 0.0
         if reranker is not None and candidates:
             candidates = candidates[: settings.rerank_candidates]  # fused order: best first
@@ -62,6 +64,7 @@ async def retrieve(
                         hit.rerank_score = sc
                         hit.score = sc
                     threshold = settings.rerank_threshold
+                    reranked = True
                 except Exception as exc:
                     # Degrade gracefully: keep dense scores and the dense threshold.
                     logger.exception("Reranker failed; falling back to dense scores")
@@ -70,10 +73,25 @@ async def retrieve(
             rerank_ms = (time.perf_counter() - t1) * 1000
 
         retrieval_ms = (time.perf_counter() - t0) * 1000
-        hits = sorted(candidates, key=lambda h: h.score, reverse=True)
-        hits = [h for h in hits if h.score >= threshold][: settings.context_top_n]
+        # Reranked: order by the reranker. Otherwise keep the fused (dense + keyword) order, so an
+        # exact keyword match is not pushed down just because its dense cosine is low.
+        ordered = sorted(candidates, key=lambda h: h.score, reverse=True) if reranked else list(candidates)
+
+        def relevant(h: Hit) -> bool:
+            if h.score >= threshold:
+                return True
+            rescue = settings.keyword_rescue_min_score
+            return (
+                not reranked
+                and rescue > 0
+                and h.sparse_rank is not None
+                and h.sparse_rank < settings.keyword_rescue_top_n
+                and h.sparse_score >= rescue
+            )
+
+        hits = [h for h in ordered if relevant(h)][: settings.context_top_n]
         span.set_attribute("retrieval.hits", len(hits))
         if hits:
             span.set_attribute("retrieval.top_score", round(hits[0].score, 4))
     return Retrieval(hits=hits, retrieval_ms=retrieval_ms, rerank_ms=rerank_ms,
-                     embed_ms=embed_ms, search_ms=search_ms)
+                     embed_ms=embed_ms, search_ms=search_ms, considered=ordered)

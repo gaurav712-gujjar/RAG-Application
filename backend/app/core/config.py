@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # --- embeddings ---
     embedding_model: str = "BAAI/bge-m3"
     embedding_dim: int = 1024
+    embedding_provider: str = "local" 
 
     # --- chunking (chars ~= 4 per token, so 2000 chars ~= 500 tokens) ---
     chunk_size_chars: int = 2000
@@ -46,6 +47,10 @@ class Settings(BaseSettings):
     # Latency knobs: the reranker reads every candidate in full, so fewer and shorter = faster (esp. on CPU)
     rerank_candidates: int = 6  # only the best N hybrid candidates go to the reranker
     rerank_max_length: int = 384  # tokens per (query, passage) pair; chunks beyond this are truncated
+    # Without a reranker the dense cosine can be low for a query in another script/language (e.g.
+    # romanised Hinglish vs an English chunk). A strong keyword match still counts as relevant.
+    keyword_rescue_min_score: float = 1.0  # BM25 score needed; 0 disables the rescue
+    keyword_rescue_top_n: int = 2  # only the best N keyword matches can be rescued
     rewrite_enabled: bool = True  # LLM rewrite of follow-up questions into standalone queries
 
     # --- cache / quota / rate limits (all need Redis; they fail open if Redis is down) ---
@@ -65,6 +70,8 @@ class Settings(BaseSettings):
     history_turns: int = 2
     llm_max_retries: int = 3
     llm_timeout_s: float = 30.0
+    # For reasoning models (openai/gpt-oss-20b): "low" = faster, fewer tokens. Empty = not sent.
+    llm_reasoning_effort: str = ""
 
     # --- observability ---
     log_level: str = "INFO"
@@ -105,3 +112,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+

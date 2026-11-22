@@ -1,0 +1,77 @@
+# Render Blueprint: New > Blueprint > pick this repo. Values marked `sync: false` are asked for
+# in the Render dashboard (secrets are never stored in git).
+services:
+  - type: web
+    name: docchat-api
+    runtime: python
+    region: singapore
+    plan: free            # free sleeps after 15 min idle; use "starter" to stay awake
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --no-access-log
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # --- secrets: you type these in the dashboard ---
+      - key: GROQ_API_KEY
+        sync: false
+      - key: DATABASE_URL      # postgresql+asyncpg://user:pass@host/db  (Neon: add ?ssl=require)
+        sync: false
+      - key: QDRANT_URL        # https://xxxx.cloud.qdrant.io:6333
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: CORS_ORIGINS      # your Vercel URL, no trailing slash
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: docchat-redis
+          property: connectionString
+      # --- app settings ---
+      - key: LLM_MODEL_FAST
+        value: openai/gpt-oss-20b
+      - key: LLM_MODEL_STRONG
+        value: openai/gpt-oss-20b
+      - key: MAX_OUTPUT_TOKENS
+        value: "1500"
+      - key: EMBEDDING_PROVIDER
+        value: fastembed
+      - key: EMBEDDING_MODEL
+        value: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+      - key: EMBEDDING_DIM
+        value: "384"
+      - key: QDRANT_COLLECTION
+        value: chunks_small
+      - key: RERANK_ENABLED
+        value: "false"
+      - key: REWRITE_ENABLED
+        value: "false"
+      - key: CHUNK_SIZE_CHARS
+        value: "400"
+      - key: CHUNK_OVERLAP_CHARS
+        value: "60"
+      - key: CONTEXT_TOP_N
+        value: "5"
+      - key: RELEVANCE_THRESHOLD
+        value: "0.05"
+      - key: OCR_ENABLED
+        value: "false"
+      - key: LOG_FORMAT
+        value: json
+      - key: METRICS_ENABLED
+        value: "false"
+      - key: INGEST_MODE
+        value: inline
+      - key: STORAGE_BACKEND
+        value: local
+
+  - type: keyvalue
+    name: docchat-redis
+    region: singapore
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []       # only services in this workspace can connect

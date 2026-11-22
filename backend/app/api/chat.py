@@ -48,7 +48,8 @@ def _est_tokens(chars: int) -> int:
 
 @router.post("/chat", dependencies=[Depends(limit_chat)])
 async def chat(req: ChatRequest, request: Request, user: User = Depends(get_current_user)):
-    t0 = time.perf_counter()  # request start: TTFT is measured from here
+    # TTFT starts when the request arrived (set by the middleware), so auth and rate limiting count.
+    t0 = getattr(request.state, "t0", None) or time.perf_counter()
     state = request.app.state
     user_id = user.id
     cache = getattr(state, "cache", None)
@@ -110,7 +111,8 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
             yield sse("stage", {"name": "searching"})  # instant feedback while we embed/search/rerank
 
             search_query = retrieval_query(req.question, history)  # cheap heuristic fallback
-            if settings.rewrite_enabled and needs_rewrite(req.question, history):
+            is_follow_up = bool(history) and needs_rewrite(req.question, history)
+            if settings.rewrite_enabled and is_follow_up:
                 with tracer.start_as_current_span("rewrite_query", context=ctx) as rs:
                     rewritten, rewrite_tokens = await rewrite_query(state.llm, settings, req.question, history)
                     rs.set_attribute("gen_ai.usage.total_tokens", rewrite_tokens)
@@ -120,6 +122,7 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
                     metrics.LLM_TOKENS.labels(settings.llm_model_fast, "rewrite").inc(rewrite_tokens)
                 search_query = rewritten or search_query  # on failure keep the heuristic query
 
+            prep_ms = _ms(t0)  # everything before retrieval: auth, limits, cache, quota, rewrite
             r = await retrieve(state.embedder, state.store, reranker, user_id, search_query, settings, otel_ctx=ctx)
             retrieval_ms, rerank_ms = round(r.retrieval_ms, 1), round(r.rerank_ms, 1)
             metrics.CHAT_RETRIEVAL.observe(r.retrieval_ms / 1000)
@@ -130,7 +133,12 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
                 for i, h in enumerate(r.hits, start=1)
             ]
             yield sse("sources", sources)
-            breakdown = {"embed_ms": round(r.embed_ms, 1), "search_ms": round(r.search_ms, 1)}
+            considered = [
+                {"filename": h.filename, "page": h.page, "score": round(h.score, 3),
+                 "kept": any(h is k for k in r.hits)}
+                for h in (r.considered or [])[:5]
+            ]
+            breakdown = {"considered": considered, "prep_ms": prep_ms, "embed_ms": round(r.embed_ms, 1), "search_ms": round(r.search_ms, 1)}
 
             # Nothing relevant: skip the LLM entirely (saves tokens and avoids hallucination).
             if not r.hits:
@@ -149,7 +157,10 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
 
             yield sse("stage", {"name": "writing"})
             model = choose_model(req.question, settings)
-            messages = build_messages(req.question, r.hits, history)
+            # A standalone question gets no chat history: it saves tokens and stops the model from
+            # repeating its previous answer (small models do that when history is present).
+            answer_history = history if is_follow_up else []
+            messages = build_messages(req.question, r.hits, answer_history)
             est_prompt = _est_tokens(sum(len(m["content"]) for m in messages))
             streaming_est = est_prompt
             ttft_ms: float | None = None

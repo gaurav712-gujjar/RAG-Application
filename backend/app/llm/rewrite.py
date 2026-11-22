@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 _REFERS_BACK = re.compile(
     r"\b(it|its|this|that|these|those|they|them|their|he|she|his|her|above|previous|same|also|"
-    r"iska|uska|isme|usme|yeh|ye|woh|wo|isse|usse)\b",
+    r"iska|uska|iski|uski|iske|uske|isme|usme|yeh|ye|woh|wo|vo|isse|usse|aur|and|what about|how about)\b|"
+    r"(इसका|उसका|इसकी|उसकी|इसके|उसके|इसमें|उसमें|वो|यह|ये|और)",
     re.IGNORECASE,
 )
 
@@ -25,7 +26,9 @@ SYSTEM = (
 def needs_rewrite(question: str, history: list[dict]) -> bool:
     if not history:
         return False
-    return len(question.split()) <= 6 or bool(_REFERS_BACK.search(question))
+    # Only very short questions or ones that point back ('and sick leave?', 'iska charge?').
+    # A full 5-word question like 'Free shipping kab milti hai?' stands on its own.
+    return len(question.split()) <= 3 or bool(_REFERS_BACK.search(question))
 
 
 async def rewrite_query(

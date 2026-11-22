@@ -18,7 +18,7 @@ from app.core.logging import setup_logging
 from app.core.middleware import ObservabilityMiddleware
 from app.core.storage import get_storage
 from app.core.tracing import setup_tracing, shutdown_tracing
-from app.embeddings.embedder import SentenceTransformerEmbedder
+from app.embeddings.factory import make_embedder
 from app.llm.groq_client import GroqLLM
 from app.retrieval.rerank import CrossEncoderReranker
 from app.retrieval.store import VectorStore, make_client
@@ -40,8 +40,8 @@ async def lifespan(app: FastAPI):
         app.state.storage = storage
 
     if not hasattr(app.state, "embedder"):
-        embedder = SentenceTransformerEmbedder(settings.embedding_model, settings.embedding_dim)
-        logger.info("Loading embedding model %s ...", settings.embedding_model)
+        embedder = make_embedder(settings)
+        logger.info("Loading embedder (%s) ...", settings.embedding_provider)
         await embedder.warmup()
         app.state.embedder = embedder
 
@@ -62,7 +62,9 @@ async def lifespan(app: FastAPI):
     # Redis powers the answer cache, token quota and rate limits. All three fail open.
     created_redis = None
     if not hasattr(app.state, "redis"):
-        created_redis = aioredis.from_url(settings.redis_url, decode_responses=True) if settings.redis_url else None
+        created_redis = aioredis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=0.5, socket_timeout=1.0
+        ) if settings.redis_url else None
         app.state.redis = created_redis
     r = app.state.redis
     if not hasattr(app.state, "cache"):
@@ -72,13 +74,13 @@ async def lifespan(app: FastAPI):
     if not hasattr(app.state, "limiter"):
         app.state.limiter = RateLimiter(r) if r is not None else None
 
-    if not hasattr(app.state, "llm"):
-        if not settings.groq_api_key:
-            logger.warning("GROQ_API_KEY is not set: /chat will return an error until it is.")
-        app.state.llm = GroqLLM(
-            settings.groq_api_key,
-            max_retries=settings.llm_max_retries,
-            timeout_s=settings.llm_timeout_s,
+        if not hasattr(app.state, "llm"):
+            if not settings.groq_api_key:
+                logger.warning("GROQ_API_KEY is not set: /chat will return an error until it is.")
+            app.state.llm = GroqLLM(
+                settings.groq_api_key,
+                max_retries=settings.llm_max_retries,
+                timeout_s=settings.llm_timeout_s,
         )
     yield
     if created_redis is not None:
@@ -119,3 +121,5 @@ async def prometheus_metrics(request: Request):
         raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
     body, content_type = metrics.render()
     return Response(body, media_type=content_type)
+
+

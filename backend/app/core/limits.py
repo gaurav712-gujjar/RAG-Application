@@ -11,7 +11,7 @@ import uuid
 from fastapi import Depends, HTTPException, Request
 
 from app.auth.deps import get_current_user
-from app.core.cache import warn_redis
+from app.core.cache import redis_down, warn_redis
 from app.core.config import get_settings
 from app.models import User
 
@@ -43,6 +43,8 @@ class TokenQuota:
         return max(1, int((midnight - now).total_seconds()))
 
     async def used(self, user_id: str) -> int:
+        if redis_down():
+            return 0
         try:
             return int(await self.redis.get(self._key(user_id)) or 0)
         except Exception as e:
@@ -57,7 +59,7 @@ class TokenQuota:
             raise QuotaExceeded(used, self.daily_limit, self.seconds_until_reset())
 
     async def add(self, user_id: str, tokens: int) -> None:
-        if tokens <= 0:
+        if tokens <= 0 or redis_down():
             return
         try:
             key = self._key(user_id)
@@ -75,7 +77,7 @@ class RateLimiter:
 
     async def hit(self, key: str, limit: int, window_s: int) -> int | None:
         """Record one request. Returns None if allowed, else seconds to wait (Retry-After)."""
-        if limit <= 0:
+        if limit <= 0 or redis_down():
             return None
         try:
             now = time.time()
