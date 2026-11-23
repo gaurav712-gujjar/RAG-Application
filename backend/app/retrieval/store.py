@@ -29,13 +29,16 @@ class Hit:
     sparse_rank: int | None = None  # 0 = best keyword match
 
 
-def user_filter(user_id: str, doc_id: str | None = None) -> models.Filter:
-    """Tenant isolation. Every read and delete goes through this; user_id is mandatory."""
+def user_filter(user_id: str, doc_id: str | None = None, doc_ids: list[str] | None = None) -> models.Filter:
+    """Tenant isolation. Every read and delete goes through this; user_id is mandatory.
+    doc_ids narrows a search to some of the user's own documents (never widens it)."""
     if not user_id:
         raise ValueError("user_id is required")
     must = [models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
     if doc_id:
         must.append(models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id)))
+    if doc_ids:
+        must.append(models.FieldCondition(key="doc_id", match=models.MatchAny(any=list(doc_ids))))
     return models.Filter(must=must)
 
 
@@ -114,26 +117,29 @@ class VectorStore:
             chunk_index=p["chunk_index"],
         )
 
-    async def search(self, user_id: str, vector: list[float], top_k: int) -> list[Hit]:
+    async def search(
+        self, user_id: str, vector: list[float], top_k: int, doc_ids: list[str] | None = None
+    ) -> list[Hit]:
         """Dense-only search (used when hybrid is disabled)."""
         res = await self.client.query_points(
             self.collection,
             query=vector,
             using=DENSE,
-            query_filter=user_filter(user_id),
+            query_filter=user_filter(user_id, doc_ids=doc_ids),
             limit=top_k,
             with_payload=True,
         )
         return [self._hit(p, p.score) for p in res.points]
 
     async def hybrid_search(
-        self, user_id: str, vector: list[float], query_text: str, top_k: int
+        self, user_id: str, vector: list[float], query_text: str, top_k: int,
+        doc_ids: list[str] | None = None,
     ) -> list[Hit]:
         """Dense + BM25, fused with RRF. Both legs carry the user_id filter.
 
         Fusion is done client-side so each hit keeps a real dense cosine (Qdrant's own RRF only
         returns fused rank scores, which can't be thresholded)."""
-        flt = user_filter(user_id)
+        flt = user_filter(user_id, doc_ids=doc_ids)
         common = dict(query_filter=flt, limit=top_k, with_payload=True, with_vectors=[DENSE])
         legs = [self.client.query_points(self.collection, query=vector, using=DENSE, **common)]
         sparse_q = query_vector(query_text)
