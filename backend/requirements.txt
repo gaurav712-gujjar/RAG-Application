@@ -13,7 +13,7 @@ python-docx>=1.1
 langchain-text-splitters>=0.3
 qdrant-client>=1.12,<2
 # sentence-transformers>=3.0  # also installs transformers, used by the reranker
-fastembed
+# fastembed
 groq>=0.11
 numpy
 # Phase 2

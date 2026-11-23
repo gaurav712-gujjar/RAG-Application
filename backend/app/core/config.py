@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     qdrant_collection: str = "chunks_hybrid"
 
     # --- embeddings ---
+    gemini_api_key: str = ""
     embedding_model: str = "BAAI/bge-m3"
     embedding_dim: int = 1024
     embedding_provider: str = "local" 
