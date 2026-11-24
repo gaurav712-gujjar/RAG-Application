@@ -163,7 +163,7 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
                 web_results = await web_search(
                     search_query,
                     max_results=getattr(settings, "web_search_results", 5),
-                    region=getattr(settings, "web_search_region", "wt-wt"),
+                    region=getattr(settings, "web_search_region", "in-en"),
                 )
                 breakdown["web_ms"] = _ms(t_web)
                 sources = [
