@@ -19,7 +19,7 @@ from app.llm.prompts import (
 from app.llm.rewrite import needs_rewrite, rewrite_query
 from app.models import User
 from app.retrieval.search import retrieve
-from app.websearch.ddg import web_search
+from app.websearch.search import web_search
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
