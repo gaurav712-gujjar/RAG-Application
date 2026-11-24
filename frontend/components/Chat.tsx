@@ -1,21 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { ApiError, Doc, HistoryTurn, Latency, Mode, Source, listDocs, streamChat } from "@/lib/api";
-
-type Message = {
-  role: "user" | "assistant";
-  content: string;
-  sources?: Source[];
-  latency?: Latency;
-  stage?: "searching" | "web" | "writing";
-  startedAt?: number;
-  question?: string;
-  answerSource?: "docs" | "web";
-  webAvailable?: boolean;
-  error?: string;
-  streaming?: boolean;
-};
+import type { Message } from "@/lib/threads";
+import Markdown from "./Markdown";
+import { CheckIcon, CopyIcon, FileIcon, GlobeIcon, MenuIcon, PlusIcon, SendIcon } from "./icons";
 
 const sec = (ms?: number) => (ms === undefined || ms === null ? "–" : `${(ms / 1000).toFixed(2)} s`);
 const STAGE_TEXT = {
@@ -30,6 +19,12 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "web", label: "Web", hint: "Search the web only" },
 ];
 const MODE_KEY = "docchat_mode";
+const STARTERS = [
+  "Summarize my documents",
+  "What are the key points?",
+  "List important dates and numbers",
+  "Explain the main idea in Hindi",
+];
 
 const hostOf = (url?: string) => {
   try {
@@ -66,29 +61,28 @@ function Waterfall({ l }: { l: Latency }) {
   const sum = parts.reduce((a, p) => a + p.ms, 0) || 1;
 
   return (
-    <div className="mt-4 max-w-md" aria-label="Where the time went">
-      <p className="text-sm">
-        <span className="font-semibold">First word in {sec(ttft)}</span>
-        <span className="text-muted"> · total {sec(l.totalMs)}</span>
-        {l.cached && <span className="ml-2 rounded bg-done/10 px-1.5 py-0.5 text-xs text-done">from cache, no tokens used</span>}
-        {l.clientTtftMs !== undefined && !l.cached && (
-          <span className="text-muted" title="Measured in your browser, includes the network"> · you saw it at {sec(l.clientTtftMs)}</span>
-        )}
-      </p>
-      <div className="mt-2 flex h-2 gap-px overflow-hidden rounded-full">
-        {parts.map((p) => (
-          <span key={p.name} className={p.cls} style={{ width: `${(p.ms / sum) * 100}%` }} title={`${p.name}: ${Math.round(p.ms)} ms`} />
-        ))}
+    <details className="mt-3 text-xs text-muted">
+      <summary className="cursor-pointer select-none">
+        First word in {sec(ttft)} · total {sec(l.totalMs)}
+        {l.cached && " · from cache, no tokens used"}
+        {l.clientTtftMs !== undefined && !l.cached && ` · you saw it at ${sec(l.clientTtftMs)}`}
+      </summary>
+      <div className="mt-2 max-w-md" aria-label="Where the time went">
+        <div className="flex h-2 gap-px overflow-hidden rounded-full">
+          {parts.map((p) => (
+            <span key={p.name} className={p.cls} style={{ width: `${(p.ms / sum) * 100}%` }} title={`${p.name}: ${Math.round(p.ms)} ms`} />
+          ))}
+        </div>
+        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+          {parts.map((p) => (
+            <li key={p.name} className="flex items-center gap-1.5">
+              <span className={`h-2 w-2 rounded-full ${p.cls}`} aria-hidden />
+              {p.name} {Math.round(p.ms)} ms
+            </li>
+          ))}
+        </ul>
       </div>
-      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-        {parts.map((p) => (
-          <li key={p.name} className="flex items-center gap-1.5">
-            <span className={`h-2 w-2 rounded-full ${p.cls}`} aria-hidden />
-            {p.name} {Math.round(p.ms)} ms
-          </li>
-        ))}
-      </ul>
-    </div>
+    </details>
   );
 }
 
@@ -107,7 +101,7 @@ function Waiting({ stage, startedAt }: { stage: keyof typeof STAGE_TEXT; started
   );
 }
 
-/** Show chips only for sources the answer actually cites; fall back to all if none are cited. */
+/** Sources the answer actually cites; falls back to the best match when it cites none. */
 function citedSources(m: Message): Source[] {
   const all = m.sources ?? [];
   // Models sometimes write 【1】 (full-width brackets) in Hindi answers, so accept both styles.
@@ -115,25 +109,80 @@ function citedSources(m: Message): Source[] {
   const picked = all.filter((s) => cited.has(s.n));
   if (picked.length) return picked;
   if (all.some((s) => s.kind === "web")) return []; // a web answer that cites nothing shows no links
-  // No citation in the text: show only the best match, not every retrieved file.
-  return m.content.startsWith("Not found") || m.content.startsWith("No web results") ? [] : all.slice(0, 1);
+  return m.content.startsWith("Not found") ? [] : all.slice(0, 1);
+}
+
+function SourceCard({ s }: { s: Source }) {
+  const web = s.kind === "web";
+  const body = (
+    <>
+      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-side text-done">
+        {web ? <GlobeIcon width={15} height={15} /> : <FileIcon width={15} height={15} />}
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-[13px] font-medium">{web ? hostOf(s.url) : s.filename}</span>
+        <span className="block truncate text-xs text-muted">{web ? s.filename : `Page ${s.page}`}</span>
+      </span>
+      <span className="ml-auto shrink-0 pl-2 text-xs font-semibold text-done">[{s.n}]</span>
+    </>
+  );
+  const cls = "flex w-56 max-w-full items-center gap-2.5 rounded-xl border border-line bg-panel px-2.5 py-2";
+  return web ? (
+    <a href={s.url} target="_blank" rel="noopener noreferrer" className={`${cls} hover:border-ink/40`}>
+      {body}
+    </a>
+  ) : (
+    <div className={cls}>{body}</div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setDone(true);
+          setTimeout(() => setDone(false), 1500);
+        } catch {
+          /* clipboard blocked: nothing to do */
+        }
+      }}
+      className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-muted hover:bg-side hover:text-ink"
+    >
+      {done ? <CheckIcon width={14} height={14} /> : <CopyIcon width={14} height={14} />}
+      {done ? "Copied" : "Copy"}
+    </button>
+  );
 }
 
 export default function Chat({
-  onUnauthorized,
-  onAnswered,
+  threadId, title, messages, update, docsVersion,
+  onUnauthorized, onAnswered, onOpenDocs, onOpenMenu, onDocCount,
 }: {
+  threadId: string;
+  title: string;
+  messages: Message[];
+  update: (id: string, fn: (m: Message[]) => Message[]) => void;
+  docsVersion: number;
   onUnauthorized: () => void;
   onAnswered?: () => void;
+  onOpenDocs: () => void;
+  onOpenMenu: () => void; // phones: open the sidebar drawer
+  onDocCount: (n: number) => void;
 }) {
-  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<Mode>("docs_web");
   const [docs, setDocs] = useState<Doc[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set()); // empty = search all documents
+  const [menuOpen, setMenuOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const textRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -159,7 +208,9 @@ export default function Chat({
 
   const loadDocs = async () => {
     try {
-      setDocs((await listDocs()).filter((d) => d.status === "ready"));
+      const ready = (await listDocs()).filter((d) => d.status === "ready");
+      setDocs(ready);
+      onDocCount(ready.length);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) onUnauthorized();
     }
@@ -167,7 +218,21 @@ export default function Chat({
   useEffect(() => {
     loadDocs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [docsVersion]);
+
+  // Close the + menu on outside click or Escape.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const away = (e: MouseEvent) => !menuRef.current?.contains(e.target as Node) && setMenuOpen(false);
+    const esc = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setMenuOpen(false);
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [menuOpen]);
+
   const toggleDoc = (id: string) =>
     setSelected((cur) => {
       const next = new Set(cur);
@@ -176,26 +241,41 @@ export default function Chat({
       return next;
     });
 
-  const patchLast = (fn: (m: Message) => Message) =>
-    setMessages((all) => all.map((m, i) => (i === all.length - 1 ? fn(m) : m)));
+  const growTextarea = () => {
+    const el = textRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
+  };
 
-  function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  function submit(e?: FormEvent) {
+    e?.preventDefault();
     const question = input.trim();
     if (!question || busy) return;
     setInput("");
+    requestAnimationFrame(growTextarea);
     ask(question, mode, messages);
   }
+  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      submit();
+    }
+  };
 
   /** Re-ask the last question on the web, replacing the "Not found" answer. */
   function searchWeb(question: string) {
     if (busy) return;
     const before = messages.slice(0, -2);
-    setMessages(before);
+    update(threadId, () => before);
     ask(question, "web", before);
   }
 
   async function ask(question: string, useMode: Mode, past: Message[]) {
+    const tid = threadId; // keep writing to this chat even if the person opens another one
+    const patchLast = (fn: (m: Message) => Message) =>
+      update(tid, (all) => all.map((m, i) => (i === all.length - 1 ? fn(m) : m)));
+
     const ids = [...selected].filter((id) => docs.some((d) => d.id === id));
     const history: HistoryTurn[] = past
       .filter((m) => !m.error && m.content)
@@ -204,7 +284,7 @@ export default function Chat({
 
     const t0 = performance.now(); // client-side clock starts at send
     setBusy(true);
-    setMessages((all) => [
+    update(tid, (all) => [
       ...all,
       { role: "user", content: question },
       {
@@ -268,39 +348,73 @@ export default function Chat({
     }
   }
 
+  const modeLabel = MODES.find((m) => m.id === mode)!.label;
+  const empty = messages.length === 0;
+
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
-        <div className="mx-auto max-w-2xl space-y-8">
-          {messages.length === 0 && (
-            <div className="pt-16">
-              <h2 className="text-2xl font-semibold tracking-tight">Ask your documents anything.</h2>
-              <p className="mt-2 max-w-md text-muted">
-                Answers cite the page they came from. Pick <b>Documents + Web</b> below to fall back to a web search
-                when your files don’t cover the question, or <b>Web</b> to skip your files.
+    <div className="flex h-full min-w-0 flex-col">
+      <header className="flex items-center gap-3 border-b border-line px-4 py-3 md:px-6">
+        <button onClick={onOpenMenu} aria-label="Open menu" className="rounded-md p-1.5 text-muted hover:bg-side md:hidden">
+          <MenuIcon />
+        </button>
+        <h1 className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{title}</h1>
+        <span className="shrink-0 rounded-full bg-side px-2.5 py-1 text-xs text-muted" title={MODES.find((m) => m.id === mode)!.hint}>
+          {modeLabel}
+        </span>
+      </header>
+
+      <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
+        <div className="mx-auto max-w-3xl space-y-8">
+          {empty && (
+            <div className="pt-10 md:pt-20">
+              <h2 className="text-3xl font-semibold tracking-tight">What do you want to know?</h2>
+              <p className="mt-2 max-w-lg text-muted">
+                {docs.length === 0
+                  ? "Add a document to ask about it, or switch to Web to search the internet."
+                  : `Asking across ${selected.size || docs.length} document${(selected.size || docs.length) === 1 ? "" : "s"}. Every answer shows where it came from.`}
               </p>
+              <div className="mt-6 flex flex-wrap gap-2">
+                {docs.length === 0 && (
+                  <button onClick={onOpenDocs} className="rounded-full bg-ink px-4 py-2 text-sm font-medium text-panel">
+                    Add documents
+                  </button>
+                )}
+                {STARTERS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => !busy && ask(s, mode, messages)}
+                    disabled={busy}
+                    className="rounded-full border border-line bg-panel px-4 py-2 text-sm hover:border-ink/40 disabled:opacity-50"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
+
           {messages.map((m, i) =>
             m.role === "user" ? (
               <div key={i} className="flex justify-end">
-                <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-ink px-4 py-2.5 text-sm text-panel">
+                <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-sel px-4 py-2.5 text-[15px]">
                   {m.content}
                 </p>
               </div>
             ) : (
-              <div key={i} className="border-l-2 border-done pl-4">
+              <div key={i} className="min-w-0">
                 {!m.content && m.streaming && !m.error && m.stage && m.startedAt !== undefined && (
                   <Waiting stage={m.stage} startedAt={m.startedAt} />
                 )}
                 {m.answerSource === "web" && m.content && (
-                  <p className="mb-1 text-xs font-medium text-done">From the web, not your documents</p>
+                  <p className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-done/10 px-2.5 py-1 text-xs font-medium text-done">
+                    <GlobeIcon width={13} height={13} /> From the web, not your documents
+                  </p>
                 )}
                 {m.content && (
-                  <p className="whitespace-pre-wrap text-[15px] leading-7">
-                    {m.content}
+                  <div>
+                    <Markdown text={m.content} />
                     {m.streaming && <span className="caret ml-0.5 inline-block h-4 w-0.5 translate-y-0.5 bg-ink" aria-hidden />}
-                  </p>
+                  </div>
                 )}
                 {m.error && (
                   <p role="alert" className="text-sm text-bad">
@@ -308,31 +422,23 @@ export default function Chat({
                   </p>
                 )}
                 {citedSources(m).length > 0 && (
-                  <ul className="mt-3 flex flex-wrap gap-1.5">
-                    {citedSources(m).map((s) => (
-                      <li key={s.n} className="rounded-md border border-line bg-panel px-2 py-1 text-xs">
-                        <span className="font-semibold text-done">[{s.n}]</span>{" "}
-                        {s.kind === "web" ? (
-                          <a href={s.url} target="_blank" rel="noopener noreferrer" className="underline-offset-2 hover:underline" title={s.filename}>
-                            {hostOf(s.url)}
-                          </a>
-                        ) : (
-                          <>
-                            {s.filename}, page {s.page}
-                          </>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="mt-4">
+                    <p className="mb-2 text-xs font-medium text-muted">Sources</p>
+                    <div className="flex flex-wrap gap-2">
+                      {citedSources(m).map((s) => (
+                        <SourceCard key={s.n} s={s} />
+                      ))}
+                    </div>
+                  </div>
                 )}
                 {m.webAvailable && !m.streaming && m.question && i === messages.length - 1 && (
                   <button
                     type="button"
                     onClick={() => searchWeb(m.question!)}
                     disabled={busy}
-                    className="mt-3 rounded-lg border border-line bg-panel px-3 py-1.5 text-sm font-medium hover:border-ink disabled:opacity-40"
+                    className="mt-4 inline-flex items-center gap-2 rounded-full border border-line bg-panel px-4 py-2 text-sm font-medium hover:border-ink/40 disabled:opacity-40"
                   >
-                    Search the web instead
+                    <GlobeIcon width={15} height={15} /> Search the web instead
                   </button>
                 )}
                 {m.content.startsWith("Not found") && !m.streaming && (m.latency?.considered?.length ?? 0) > 0 && (
@@ -347,6 +453,11 @@ export default function Chat({
                     </ul>
                   </details>
                 )}
+                {!m.streaming && m.content && (
+                  <div className="mt-2 flex items-center gap-1">
+                    <CopyButton text={m.content} />
+                  </div>
+                )}
                 {m.latency && m.latency.serverTtftMs !== undefined && !m.streaming && <Waterfall l={m.latency} />}
               </div>
             ),
@@ -355,58 +466,97 @@ export default function Chat({
         </div>
       </div>
 
-      <form onSubmit={onSubmit} className="border-t border-line bg-panel px-4 py-3 md:px-10">
-        <div className="mx-auto max-w-2xl">
-          <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-            <div role="group" aria-label="Where to look" className="inline-flex rounded-lg border border-line bg-white p-0.5">
-              {MODES.map((o) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  title={o.hint}
-                  aria-pressed={mode === o.id}
-                  onClick={() => chooseMode(o.id)}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                    mode === o.id ? "bg-ink text-panel" : "text-muted hover:text-ink"
-                  }`}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-            {mode !== "web" && docs.length > 0 && (
-              <details className="relative text-xs" onToggle={(e) => (e.currentTarget as HTMLDetailsElement).open && loadDocs()}>
-                <summary className="cursor-pointer text-muted hover:text-ink">
-                  {selected.size === 0 ? `All documents (${docs.length})` : `${selected.size} of ${docs.length} documents`}
-                </summary>
-                <div className="absolute bottom-7 left-0 z-10 max-h-60 w-72 overflow-y-auto rounded-lg border border-line bg-panel p-2 shadow-lg">
-                  <button type="button" onClick={() => setSelected(new Set())} className="mb-1 text-xs text-muted underline">
-                    Use all documents
+      <form onSubmit={submit} className="px-4 pb-4 md:px-8 md:pb-6">
+        <div className="relative mx-auto max-w-3xl rounded-2xl border border-line bg-panel p-3 shadow-sm focus-within:border-ink/40">
+          <textarea
+            ref={textRef}
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              growTextarea();
+            }}
+            onKeyDown={onKey}
+            rows={1}
+            maxLength={2000}
+            aria-label="Your question"
+            placeholder={mode === "web" ? "Ask anything, answered from the web" : "Send a message"}
+            className="block max-h-[180px] w-full resize-none bg-transparent px-1 py-1 text-[15px] placeholder:text-muted focus:outline-none"
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <div ref={menuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setMenuOpen((o) => !o)}
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-muted hover:bg-side hover:text-ink"
+              >
+                <PlusIcon width={17} height={17} /> Tools
+              </button>
+              {menuOpen && (
+                <div role="menu" className="absolute bottom-11 left-0 z-20 w-80 max-w-[calc(100vw-3rem)] rounded-2xl border border-line bg-panel p-2 shadow-xl">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onOpenDocs();
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm font-medium hover:bg-side"
+                  >
+                    <FileIcon className="text-done" /> Upload or manage documents
                   </button>
-                  {docs.map((d) => (
-                    <label key={d.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 hover:bg-white">
-                      <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleDoc(d.id)} />
-                      <span className="truncate" title={d.filename}>{d.filename}</span>
-                    </label>
+                  <p className="px-3 pb-1 pt-3 text-xs font-medium text-muted">Where to look</p>
+                  {MODES.map((o) => (
+                    <button
+                      key={o.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={mode === o.id}
+                      onClick={() => chooseMode(o.id)}
+                      className={`flex w-full items-start gap-2.5 rounded-xl px-3 py-2 text-left text-sm hover:bg-side ${mode === o.id ? "bg-sel/60" : ""}`}
+                    >
+                      <span className={`mt-1 h-3.5 w-3.5 shrink-0 rounded-full border ${mode === o.id ? "border-4 border-ink" : "border-line"}`} aria-hidden />
+                      <span>
+                        <span className="block font-medium">{o.label}</span>
+                        <span className="block text-xs text-muted">{o.hint}</span>
+                      </span>
+                    </button>
                   ))}
+                  {mode !== "web" && docs.length > 0 && (
+                    <>
+                      <div className="flex items-center justify-between px-3 pb-1 pt-3">
+                        <p className="text-xs font-medium text-muted">
+                          {selected.size === 0 ? `All documents (${docs.length})` : `${selected.size} of ${docs.length} documents`}
+                        </p>
+                        {selected.size > 0 && (
+                          <button type="button" onClick={() => setSelected(new Set())} className="text-xs text-muted underline">
+                            Use all
+                          </button>
+                        )}
+                      </div>
+                      <div className="max-h-40 overflow-y-auto">
+                        {docs.map((d) => (
+                          <label key={d.id} className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm hover:bg-side">
+                            <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleDoc(d.id)} />
+                            <span className="truncate" title={d.filename}>{d.filename}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
-              </details>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              maxLength={2000}
-              aria-label="Your question"
-              placeholder={mode === "web" ? "Ask anything, answered from the web" : "Ask about your documents"}
-              className="min-w-0 flex-1 rounded-lg border border-line bg-white px-3.5 py-2.5 text-sm placeholder:text-muted"
-            />
+              )}
+            </div>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted">
+              {mode !== "web" && selected.size > 0 ? `${selected.size} document${selected.size === 1 ? "" : "s"} selected` : ""}
+            </span>
             <button
               disabled={busy || !input.trim()}
-              className="rounded-lg bg-ink px-5 py-2.5 text-sm font-medium text-panel transition-opacity disabled:opacity-40"
+              aria-label={busy ? "Answering" : "Send"}
+              className="grid h-9 w-9 place-items-center rounded-full bg-ink text-panel transition-opacity disabled:opacity-30"
             >
-              {busy ? "Answering" : "Ask"}
+              {busy ? <span className="seg-live h-2 w-4 rounded-full" /> : <SendIcon />}
             </button>
           </div>
         </div>

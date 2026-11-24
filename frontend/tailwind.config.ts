@@ -10,6 +10,8 @@ const config: Config = {
       colors: {
         bg: c("bg"),
         panel: c("panel"),
+        side: c("side"), // sidebar tint
+        sel: c("sel"), // selected item
         ink: c("ink"),
         muted: c("muted"),
         line: c("line"),
