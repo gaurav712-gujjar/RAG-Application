@@ -1,64 +1,94 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import AuthForm from "@/components/AuthForm";
+import { useRouter } from "next/navigation";
 import Chat from "@/components/Chat";
-import UploadPanel from "@/components/UploadPanel";
-import UsageBadge from "@/components/UsageBadge";
+import DocsModal from "@/components/DocsModal";
+import Sidebar from "@/components/Sidebar";
 import { getToken, setToken } from "@/lib/api";
+import { clearThreads, useThreads } from "@/lib/threads";
 
 export default function Home() {
-  const [ready, setReady] = useState(false);
+  const router = useRouter();
   const [authed, setAuthed] = useState(false);
   const [usageTick, setUsageTick] = useState(0);
-  const [tab, setTab] = useState<"files" | "chat">("chat"); // small screens show one pane at a time
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [docsVersion, setDocsVersion] = useState(0);
+  const [docCount, setDocCount] = useState(0);
+  const [drawer, setDrawer] = useState(false); // phones: sidebar as a drawer
+  const t = useThreads();
 
   // Read the token after mount so server and client markup match.
   useEffect(() => {
-    setAuthed(!!getToken());
-    setReady(true);
-  }, []);
+    if (getToken()) setAuthed(true);
+    else router.replace("/login");
+  }, [router]);
 
   const logout = useCallback(() => {
     setToken(null);
-    setAuthed(false);
-  }, []);
+    clearThreads();
+    router.replace("/login");
+  }, [router]);
 
-  if (!ready) return null;
-  if (!authed) return <AuthForm onDone={() => setAuthed(true)} />;
+  const closeDocs = () => {
+    setDocsOpen(false);
+    setDocsVersion((v) => v + 1); // refresh the document list in the chat
+  };
 
-  const tabCls = (t: typeof tab) =>
-    `flex-1 border-b-2 py-2.5 text-sm font-medium ${tab === t ? "border-ink" : "border-transparent text-muted"}`;
+  if (!authed || !t.ready) return <div className="backdrop h-screen" />;
+  const active = t.threads.find((x) => x.id === t.activeId) ?? t.threads[0];
+
+  const side = (
+    <Sidebar
+      threads={t.threads}
+      activeId={t.activeId}
+      usageTick={usageTick}
+      docCount={docCount}
+      onSelect={(id) => {
+        t.setActiveId(id);
+        setDrawer(false);
+      }}
+      onNew={() => {
+        t.create();
+        setDrawer(false);
+      }}
+      onDelete={t.remove}
+      onOpenDocs={() => {
+        setDocsOpen(true);
+        setDrawer(false);
+      }}
+      onLogout={logout}
+      onClose={drawer ? () => setDrawer(false) : undefined}
+    />
+  );
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-line bg-panel px-4 py-3 md:px-6">
-        <h1 className="text-base font-semibold tracking-tight">DocChat</h1>
-        <div className="flex items-center gap-5">
-          <UsageBadge refreshKey={usageTick} />
-          <button onClick={logout} className="text-sm text-muted underline-offset-2 hover:text-ink hover:underline">
-            Sign out
-          </button>
-        </div>
-      </header>
-
-      <nav className="flex border-b border-line bg-panel md:hidden" aria-label="Switch view">
-        <button className={tabCls("files")} onClick={() => setTab("files")}>
-          Documents
-        </button>
-        <button className={tabCls("chat")} onClick={() => setTab("chat")}>
-          Chat
-        </button>
-      </nav>
-
-      <main className="grid flex-1 grid-cols-1 overflow-hidden md:grid-cols-[340px_1fr]">
-        <aside className={`${tab === "files" ? "block" : "hidden"} overflow-y-auto border-line bg-panel p-4 md:block md:border-r`}>
-          <UploadPanel onUnauthorized={logout} />
-        </aside>
-        <section className={`${tab === "chat" ? "block" : "hidden"} overflow-hidden md:block`}>
-          <Chat onUnauthorized={logout} onAnswered={() => setUsageTick((n) => n + 1)} />
-        </section>
-      </main>
+    <div className="backdrop h-screen md:p-3">
+      <div className="mx-auto flex h-full max-w-[1500px] overflow-hidden bg-panel md:rounded-2xl md:shadow-xl">
+        <aside className="hidden w-[290px] shrink-0 border-r border-line md:block">{side}</aside>
+        {drawer && (
+          <div className="fixed inset-0 z-40 md:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+            <div className="absolute inset-0 bg-ink/40" onClick={() => setDrawer(false)} />
+            <div className="absolute inset-y-0 left-0 w-[85%] max-w-[320px] shadow-2xl">{side}</div>
+          </div>
+        )}
+        <main className="min-w-0 flex-1">
+          <Chat
+            key={active.id}
+            threadId={active.id}
+            title={active.title}
+            messages={active.messages}
+            update={t.update}
+            docsVersion={docsVersion}
+            onUnauthorized={logout}
+            onAnswered={() => setUsageTick((n) => n + 1)}
+            onOpenDocs={() => setDocsOpen(true)}
+            onOpenMenu={() => setDrawer(true)}
+            onDocCount={setDocCount}
+          />
+        </main>
+      </div>
+      {docsOpen && <DocsModal onClose={closeDocs} onUnauthorized={logout} />}
     </div>
   );
 }

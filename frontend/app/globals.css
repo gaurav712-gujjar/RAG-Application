@@ -3,12 +3,14 @@
 @tailwind utilities;
 
 :root {
-  --bg: 232 237 236;
-  --panel: 249 251 250;
-  --ink: 16 39 43;
-  --muted: 91 111 115;
-  --line: 203 214 214;
-  --done: 11 110 110;
+  --bg: 233 238 248;
+  --panel: 255 255 255;
+  --side: 238 242 250;
+  --sel: 214 227 251;
+  --ink: 24 31 48;
+  --muted: 100 113 138;
+  --line: 221 227 238;
+  --done: 15 118 110;
   --live: 229 154 0;
   --bad: 192 57 43;
 }
@@ -16,6 +18,11 @@
 html,
 body {
   height: 100%;
+}
+
+/* Soft colour behind the white app window, like a desktop wallpaper. */
+.backdrop {
+  background: linear-gradient(135deg, #cdd9f3 0%, #e1d7f1 52%, #f4dccf 100%);
 }
 
 body {
@@ -51,3 +58,28 @@ body {
   .seg-live { animation: none; background-image: none; background-color: rgb(var(--live)); }
   .caret { animation: none; }
 }
+
+/* Answer text rendered from Markdown. */
+.md { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: 650; line-height: 1.3; letter-spacing: -0.01em; margin: 1.4em 0 0.5em; }
+.md h1 { font-size: 1.45rem; }
+.md h2 { font-size: 1.2rem; }
+.md h3 { font-size: 1.05rem; }
+.md p { margin: 0.7em 0; }
+.md ul, .md ol { margin: 0.7em 0; padding-left: 1.4em; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li { margin: 0.25em 0; }
+.md li > p { margin: 0.2em 0; }
+.md strong { font-weight: 650; }
+.md a { color: rgb(var(--done)); text-decoration: underline; text-underline-offset: 2px; }
+.md code { background: rgb(var(--side)); border-radius: 6px; padding: 0.1em 0.35em; font-size: 0.9em; }
+.md pre { background: rgb(var(--side)); border-radius: 12px; padding: 12px 14px; overflow-x: auto; margin: 0.9em 0; }
+.md pre code { background: none; padding: 0; }
+.md blockquote { border-left: 3px solid rgb(var(--line)); padding-left: 12px; color: rgb(var(--muted)); margin: 0.9em 0; }
+.md table { border-collapse: collapse; margin: 0.9em 0; font-size: 14px; }
+.md th, .md td { border: 1px solid rgb(var(--line)); padding: 6px 10px; text-align: left; }
+.md th { background: rgb(var(--side)); font-weight: 600; }
+.md hr { border: 0; border-top: 1px solid rgb(var(--line)); margin: 1.2em 0; }
