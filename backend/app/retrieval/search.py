@@ -30,6 +30,7 @@ async def retrieve(
     query: str,
     settings: Settings,
     otel_ctx=None,
+    doc_ids: list[str] | None = None,
 ) -> Retrieval:
     """embed -> (hybrid | dense) search, user-filtered -> rerank -> threshold -> top_n.
 
@@ -44,10 +45,11 @@ async def retrieve(
         t_search = time.perf_counter()
         with tracer.start_as_current_span("vector_search") as s:
             s.set_attribute("search.hybrid", settings.hybrid_enabled)
+            extra = {"doc_ids": doc_ids} if doc_ids else {}  # only passed when the user narrowed the search
             if settings.hybrid_enabled:
-                candidates = await store.hybrid_search(user_id, vector, query, settings.retrieve_top_k)
+                candidates = await store.hybrid_search(user_id, vector, query, settings.retrieve_top_k, **extra)
             else:
-                candidates = await store.search(user_id, vector, settings.retrieve_top_k)
+                candidates = await store.search(user_id, vector, settings.retrieve_top_k, **extra)
             s.set_attribute("search.candidates", len(candidates))
         search_ms = (time.perf_counter() - t_search) * 1000
 

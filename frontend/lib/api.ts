@@ -28,7 +28,17 @@ export type Doc = {
   created_at: string;
 };
 
-export type Source = { n: number; filename: string; page: number; doc_id: string; score: number };
+export type Source = {
+  n: number;
+  filename: string;
+  page: number | null;
+  doc_id: string | null;
+  score?: number;
+  kind?: "web";
+  url?: string;
+};
+
+export type Mode = "docs" | "docs_web" | "web";
 
 export type Considered = { filename: string; page: number; score: number; kept: boolean };
 
@@ -40,6 +50,7 @@ export type Latency = {
   embedMs?: number;
   searchMs?: number;
   rerankMs?: number;
+  webMs?: number;
   considered?: Considered[];
   totalMs?: number;
   cached?: boolean;
@@ -102,11 +113,12 @@ export async function* streamChat(
   question: string,
   history: HistoryTurn[],
   signal?: AbortSignal,
+  opts: { mode?: Mode; docIds?: string[] } = {},
 ): AsyncGenerator<SseEvent> {
   const res = await fetch(`${API_URL}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ question, history }),
+    body: JSON.stringify({ question, history, mode: opts.mode ?? "docs", doc_ids: opts.docIds?.length ? opts.docIds : undefined }),
     signal,
   });
   if (!res.ok || !res.body) throw await errorFrom(res);

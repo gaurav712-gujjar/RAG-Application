@@ -13,10 +13,13 @@ from app.core.config import get_settings
 from app.core.limits import QuotaExceeded, limit_chat
 from app.core.tracing import SpanKind, fail, trace, tracer
 from app.llm.groq_client import LLMUnavailable
-from app.llm.prompts import NOT_FOUND, build_messages, choose_model, retrieval_query, trim_history
+from app.llm.prompts import (
+    NO_WEB_RESULTS, NOT_FOUND, build_messages, build_web_messages, choose_model, retrieval_query, trim_history,
+)
 from app.llm.rewrite import needs_rewrite, rewrite_query
 from app.models import User
 from app.retrieval.search import retrieve
+from app.websearch.ddg import web_search
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -31,6 +34,9 @@ class Turn(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     history: list[Turn] = Field(default_factory=list, max_length=20)
+    # docs = only your documents; docs_web = documents, then the web if nothing is found; web = web only
+    mode: Literal["docs", "docs_web", "web"] = "docs"
+    doc_ids: list[str] | None = Field(default=None, max_length=50)  # limit the search to these documents
     # NOTE: no user_id here on purpose. Identity comes only from the JWT.
 
 
@@ -57,7 +63,7 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
     reranker = getattr(state, "reranker", None)
 
     # Only first questions are cached: a follow-up's meaning depends on the conversation.
-    use_cache = cache is not None and not req.history
+    use_cache = cache is not None and not req.history and req.mode == "docs" and not req.doc_ids
     cached = await cache.get(user_id, req.question) if use_cache else None
     if use_cache:
         metrics.CACHE_LOOKUPS.labels("hit" if cached is not None else "miss").inc()
@@ -123,35 +129,62 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
                 search_query = rewritten or search_query  # on failure keep the heuristic query
 
             prep_ms = _ms(t0)  # everything before retrieval: auth, limits, cache, quota, rewrite
-            r = await retrieve(state.embedder, state.store, reranker, user_id, search_query, settings, otel_ctx=ctx)
-            retrieval_ms, rerank_ms = round(r.retrieval_ms, 1), round(r.rerank_ms, 1)
-            metrics.CHAT_RETRIEVAL.observe(r.retrieval_ms / 1000)
-            if r.rerank_ms:
-                metrics.CHAT_RERANK.observe(r.rerank_ms / 1000)
-            sources = [
-                {"n": i, "filename": h.filename, "page": h.page, "doc_id": h.doc_id, "score": round(h.score, 3)}
-                for i, h in enumerate(r.hits, start=1)
-            ]
-            yield sse("sources", sources)
-            considered = [
-                {"filename": h.filename, "page": h.page, "score": round(h.score, 3),
-                 "kept": any(h is k for k in r.hits)}
-                for h in (r.considered or [])[:5]
-            ]
-            breakdown = {"considered": considered, "prep_ms": prep_ms, "embed_ms": round(r.embed_ms, 1), "search_ms": round(r.search_ms, 1)}
+            r = None
+            retrieval_ms = rerank_ms = 0.0
+            hits: list = []
+            sources: list = []
+            breakdown = {"considered": [], "prep_ms": prep_ms, "embed_ms": 0, "search_ms": 0}
+            if req.mode != "web":
+                r = await retrieve(state.embedder, state.store, reranker, user_id, search_query, settings,
+                                   otel_ctx=ctx, doc_ids=req.doc_ids)
+                retrieval_ms, rerank_ms = round(r.retrieval_ms, 1), round(r.rerank_ms, 1)
+                metrics.CHAT_RETRIEVAL.observe(r.retrieval_ms / 1000)
+                if r.rerank_ms:
+                    metrics.CHAT_RERANK.observe(r.rerank_ms / 1000)
+                hits = r.hits
+                sources = [
+                    {"n": i, "filename": h.filename, "page": h.page, "doc_id": h.doc_id, "score": round(h.score, 3)}
+                    for i, h in enumerate(hits, start=1)
+                ]
+                yield sse("sources", sources)
+                considered = [
+                    {"filename": h.filename, "page": h.page, "score": round(h.score, 3),
+                     "kept": any(h is k for k in hits)}
+                    for h in (r.considered or [])[:5]
+                ]
+                breakdown = {"considered": considered, "prep_ms": prep_ms, "embed_ms": round(r.embed_ms, 1),
+                             "search_ms": round(r.search_ms, 1)}
+
+            use_web = req.mode == "web" or (req.mode == "docs_web" and not hits)
+            web_results: list = []
+            if use_web:
+                yield sse("stage", {"name": "web"})
+                t_web = time.perf_counter()
+                web_results = await web_search(
+                    search_query,
+                    max_results=getattr(settings, "web_search_results", 5),
+                    region=getattr(settings, "web_search_region", "wt-wt"),
+                )
+                breakdown["web_ms"] = _ms(t_web)
+                sources = [
+                    {"n": i, "kind": "web", "filename": w.title, "url": w.url, "page": None, "doc_id": None}
+                    for i, w in enumerate(web_results, start=1)
+                ]
+                yield sse("sources", sources)
 
             # Nothing relevant: skip the LLM entirely (saves tokens and avoids hallucination).
-            if not r.hits:
+            if (use_web and not web_results) or (not use_web and not hits):
                 outcome = "not_found"
                 ttft_ms = _ms(t0)
                 metrics.CHAT_TTFT.labels("not_found").observe(ttft_ms / 1000)
                 yield sse("ttft", {"ttft_ms": ttft_ms, "retrieval_ms": retrieval_ms, "cached": False})
-                yield sse("token", {"t": NOT_FOUND})
+                yield sse("token", {"t": NO_WEB_RESULTS if use_web else NOT_FOUND})
                 yield sse(
                     "done",
                     {"ttft_ms": ttft_ms, "retrieval_ms": retrieval_ms, "rerank_ms": rerank_ms, **breakdown,
                      "total_ms": _ms(t0), "model": None, "prompt_tokens": 0, "completion_tokens": 0,
-                     "cached": False},
+                     "cached": False, "answer_source": "web" if use_web else "docs",
+                     "web_available": not use_web},
                 )
                 return
 
@@ -160,7 +193,10 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
             # A standalone question gets no chat history: it saves tokens and stops the model from
             # repeating its previous answer (small models do that when history is present).
             answer_history = history if is_follow_up else []
-            messages = build_messages(req.question, r.hits, answer_history)
+            if use_web:
+                messages = build_web_messages(req.question, web_results, answer_history)
+            else:
+                messages = build_messages(req.question, hits, answer_history)
             est_prompt = _est_tokens(sum(len(m["content"]) for m in messages))
             streaming_est = est_prompt
             ttft_ms: float | None = None
@@ -222,7 +258,8 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
                 "done",
                 {"ttft_ms": ttft_ms, "retrieval_ms": retrieval_ms, "rerank_ms": rerank_ms, **breakdown,
                  "total_ms": total_ms, "model": model, "prompt_tokens": prompt_tokens,
-                 "completion_tokens": completion_tokens, "cached": False},
+                 "completion_tokens": completion_tokens, "cached": False,
+                 "answer_source": "web" if use_web else "docs"},
             )
         except LLMUnavailable as exc:
             outcome = "llm_unavailable"
