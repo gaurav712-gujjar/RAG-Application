@@ -114,7 +114,7 @@ function citedSources(m: Message): Source[] {
   const cited = new Set([...m.content.matchAll(/[\[【](\d+)[\]】]/g)].map((x) => Number(x[1])));
   const picked = all.filter((s) => cited.has(s.n));
   if (picked.length) return picked;
-  if (all.some((s) => s.kind === "web") && !m.content.startsWith("No web results")) return all.slice(0, 3);
+  if (all.some((s) => s.kind === "web")) return []; // a web answer that cites nothing shows no links
   // No citation in the text: show only the best match, not every retrieved file.
   return m.content.startsWith("Not found") || m.content.startsWith("No web results") ? [] : all.slice(0, 1);
 }
