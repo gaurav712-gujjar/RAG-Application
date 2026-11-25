@@ -8,9 +8,14 @@ from app.core.config import get_settings
 settings = get_settings()
 
 
+# 10 rounds is the usual minimum and about 4x faster than bcrypt's default of 12. On a small free-tier
+# CPU the default takes seconds per login. Existing hashes keep their own cost and still verify.
+BCRYPT_ROUNDS = 10
+
+
 def hash_password(password: str) -> str:
     # bcrypt only uses the first 72 bytes
-    return bcrypt.hashpw(password.encode()[:72], bcrypt.gensalt()).decode()
+    return bcrypt.hashpw(password.encode()[:72], bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode()
 
 
 def verify_password(password: str, password_hash: str) -> bool:
