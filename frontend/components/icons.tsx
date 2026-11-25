@@ -21,3 +21,4 @@ export const CheckIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><path d="m5
 export const LogoutIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11" /></Svg>;
 export const ChatIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" /></Svg>;
 export const StackIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><path d="m12 3 9 5-9 5-9-5z" /><path d="m3 13 9 5 9-5" /></Svg>;
+export const MicIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></Svg>;

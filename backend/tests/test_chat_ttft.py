@@ -19,8 +19,8 @@ async def test_ttft_event_comes_before_first_token_and_is_measured(ctx):
     events = parse_sse(r.text)
     names = [e for e, _ in events]
 
-    assert names[0] == "sources"
-    assert names.index("ttft") < names.index("token")  # TTFT is its own event, sent first
+    assert names[0] == "stage"  # instant "searching" feedback, before any retrieval work
+    assert names.index("sources") < names.index("ttft") < names.index("token")
     assert names[-1] == "done"
 
     ttft = dict(events)["ttft"]
@@ -63,10 +63,21 @@ async def test_history_is_trimmed_to_last_two_turns(ctx):
     history = []
     for i in range(5):
         history += [{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"a{i}"}]
-    await ctx.post("/chat", headers=headers, json={"question": "What is the refund policy?", "history": history})
+    # "and what about it?" points back, so it is a follow-up and the history is kept (trimmed)
+    await ctx.post("/chat", headers=headers, json={"question": "What is the refund policy and what about it?", "history": history})
     msgs = app.state.llm.last_messages
     assert len(msgs) == 1 + 4 + 1  # system + 2 turns (4 msgs) + question
     assert msgs[1]["content"] == "q3"
+
+
+async def test_standalone_question_gets_no_history(ctx):
+    """A full question that stands on its own must not carry the previous answer along: small
+    models repeat it (seen with 'Free shipping kab milti hai?' answered with the warranty answer)."""
+    headers = await _setup(ctx)
+    history = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]
+    await ctx.post("/chat", headers=headers, json={"question": "What is the refund policy for purchases?", "history": history})
+    msgs = app.state.llm.last_messages
+    assert [m["role"] for m in msgs] == ["system", "user"]
 
 
 async def test_model_routing(ctx):
@@ -75,3 +86,24 @@ async def test_model_routing(ctx):
     assert app.state.llm.last_model == "llama-3.1-8b-instant"
     await ctx.post("/chat", headers=headers, json={"question": "Summarize the refund policy"})
     assert app.state.llm.last_model == "llama-3.3-70b-versatile"
+
+
+async def test_stage_events_and_retrieval_breakdown(ctx):
+    headers = await _setup(ctx)
+    r = await ctx.post("/chat", headers=headers, json={"question": "What is the refund policy?"})
+    events = parse_sse(r.text)
+    stages = [d["name"] for e, d in events if e == "stage"]
+    assert stages == ["searching", "writing"]
+    done = dict(events)["done"]
+    assert done["embed_ms"] >= 0 and done["search_ms"] >= 0 and done["rerank_ms"] >= 0
+    assert done["embed_ms"] + done["search_ms"] <= done["retrieval_ms"] + 1  # parts fit inside the whole
+
+
+async def test_standalone_question_gets_no_history_even_when_rewrite_is_disabled(ctx, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "rewrite_enabled", False)
+    headers = await _setup(ctx)
+    history = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]
+    await ctx.post("/chat", headers=headers, json={"question": "What is the refund policy for purchases?", "history": history})
+    assert [m["role"] for m in app.state.llm.last_messages] == ["system", "user"]

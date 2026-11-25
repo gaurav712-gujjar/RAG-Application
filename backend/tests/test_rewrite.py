@@ -38,7 +38,7 @@ async def test_follow_up_is_rewritten_before_retrieval(ctx):
     # the rewrite prompt saw the previous turn
     assert "What is the refund policy?" in llm.last_complete_messages[-1]["content"]
     # the final answer prompt still uses the user's own words
-    assert llm.last_messages[-1]["content"].endswith("Q: and how long?")
+    assert "Q: and how long?\nAnswer in English only." in llm.last_messages[-1]["content"]
 
 
 async def test_no_rewrite_call_without_history(ctx):
@@ -61,3 +61,24 @@ async def test_rewrite_can_be_disabled(ctx, monkeypatch):
     monkeypatch.setattr(settings, "rewrite_enabled", False)
     await ctx.post("/chat", headers=h, json={"question": "and how long?", "history": [FIRST, ANSWER]})
     assert app.state.llm.complete_calls == 0
+
+
+def test_hinglish_standalone_vs_follow_up():
+    from app.llm.rewrite import needs_rewrite
+
+    h = [{"role": "user", "content": "x"}, {"role": "assistant", "content": "y"}]
+    assert not needs_rewrite("Free shipping kab milti hai?", h)  # 5 words, stands on its own
+    assert needs_rewrite("iska charge kitna hai?", h)
+    assert needs_rewrite("और बैटरी पर?", h)
+    assert needs_rewrite("and sick leave?", h)
+    assert not needs_rewrite("iska charge kitna hai?", [])  # no history: nothing to rewrite
+
+
+def test_answer_language_follows_the_question_not_the_context():
+    from app.llm.prompts import answer_language
+
+    assert answer_language("How many days of earned leave carry forward?") == "English"
+    assert answer_language("वारंटी कितने समय की होती है?") == "Hindi"
+    assert answer_language("Refund kitne din me aata hai?").startswith("Hinglish")
+    assert answer_language("Free shipping kab milti hai?").startswith("Hinglish")
+    assert answer_language("Tell me about the refund policy") == "English"  # 'me' alone is English

@@ -174,3 +174,55 @@ def test_make_client_memory_and_api_key():
     # constructing a client for a server must not connect, and must accept an API key (Qdrant Cloud)
     c = make_client("https://example.qdrant.io:6333", "secret-key")
     assert c is not None
+
+
+# ---------- keyword rescue (Hinglish query vs English chunk, weak dense match) ----------
+async def _seed_refund_corpus(store):
+    texts = [
+        "Refunds reach your original payment method in 5 to 7 business days",
+        "Shipping to metro cities takes two to three days",
+        "The router has a blue WAN port and a reset button",
+        "Casual leave is twelve days per year",
+    ]
+    await _seed(store, "u1", texts, vectors=[_unit(i) for i in range(4)])  # dense = noise (cosine ~ 0)
+
+
+async def test_keyword_match_is_kept_even_when_dense_cosine_is_low(ctx):
+    store = app.state.store
+    await _seed_refund_corpus(store)
+    r = await retrieve(FakeEmbedder(), store, None, "u1", "refund kitne din me aata hai", settings)
+    assert any("Refunds reach" in h.text for h in r.hits)
+    assert r.hits[0].sparse_rank == 0 and r.hits[0].sparse_score >= settings.keyword_rescue_min_score
+
+
+async def test_rescue_can_be_switched_off(ctx, monkeypatch):
+    monkeypatch.setattr(settings, "keyword_rescue_min_score", 0.0)
+    store = app.state.store
+    await _seed_refund_corpus(store)
+    r = await retrieve(FakeEmbedder(), store, None, "u1", "refund kitne din me aata hai", settings)
+    assert not any("Refunds reach" in h.text for h in r.hits)
+
+
+async def test_filler_words_alone_never_rescue_a_chunk(ctx):
+    store = app.state.store
+    await _seed_refund_corpus(store)
+    # every word is English/Hindi/Hinglish filler: no keyword leg, dense is noise -> nothing relevant
+    r = await retrieve(FakeEmbedder(), store, None, "u1", "kya hai ye aur kitne me", settings)
+    assert r.hits == []
+
+
+async def test_closest_candidates_are_reported_even_when_nothing_passes(ctx):
+    store = app.state.store
+    await _seed_refund_corpus(store)
+    r = await retrieve(FakeEmbedder(), store, None, "u1", "kya hai ye aur kitne me", settings)
+    assert r.hits == [] and len(r.considered) > 0
+
+
+def test_hinglish_and_hindi_filler_is_not_tokenized():
+    assert tokenize("Refund kitne din me aata hai?") == ["refund", "din", "aata"]
+    assert tokenize("वारंटी कितने समय की होती है?") == ["वारंटी", "समय"]
+
+
+def test_plural_matches_singular():
+    assert tokenize("Refunds and products") == tokenize("refund and product") == ["refund", "product"]
+    assert tokenize("business class") == ["business", "class"]  # 'ss' words are left alone

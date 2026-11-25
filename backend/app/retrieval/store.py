@@ -166,6 +166,14 @@ class VectorStore:
             hits.append(hit)
         return hits
 
+    async def first_chunks(self, user_id: str, doc_id: str, n: int = 3) -> list[str]:
+        """The opening chunks of one document (by chunk_index), used to write starter questions."""
+        points, _ = await self.client.scroll(
+            self.collection, scroll_filter=user_filter(user_id, doc_id), limit=200, with_payload=True
+        )
+        points = sorted(points, key=lambda p: p.payload.get("chunk_index", 0))
+        return [p.payload["text"] for p in points[:n]]
+
     async def delete_document(self, user_id: str, doc_id: str) -> None:
         await self.client.delete(
             self.collection,
