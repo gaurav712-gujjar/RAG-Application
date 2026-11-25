@@ -1,171 +1,312 @@
-# DocChat: RAG over your documents (Phases 1-4)
+# DocChat — Chat with your documents (RAG)
 
-Upload PDF, DOCX, TXT or MD files, then chat with them. Answers are streamed from Groq and
-show a latency badge: `TTFT 0.35s · Retrieval 0.12s · Total 2.1s` (plus `cached` when served from cache).
+Upload PDFs, Word files, text or images. Ask questions in English, Hindi or Hinglish. Get streamed answers with **citations** pointing at the exact passage, plus optional **live web search**.
 
-## Architecture
+Live stack runs on a **100% free, no-card** setup: Vercel + Render + Neon + Qdrant Cloud + Upstash + Groq + Gemini + Tavily.
+
+---
+
+## Table of contents
+1. [What it does](#1-what-it-does)
+2. [Tech stack](#2-tech-stack)
+3. [How it was built](#3-how-it-was-built)
+4. [Architecture](#4-architecture)
+5. [How a document is processed](#5-how-a-document-is-processed)
+6. [How a question is answered](#6-how-a-question-is-answered)
+7. [Advantages](#7-advantages)
+8. [Real-world use cases](#8-real-world-use-cases)
+9. [Project structure (every file and folder)](#9-project-structure)
+10. [Run locally](#10-run-locally)
+11. [Deploy (free)](#11-deploy-free)
+12. [Environment variables](#12-environment-variables)
+13. [Testing and evaluation](#13-testing-and-evaluation)
+14. [Security notes](#14-security-notes)
+15. [Limitations and roadmap](#15-limitations-and-roadmap)
+
+---
+
+## 1. What it does
+
+- **Accounts**: register/login (JWT). Every user only sees their own documents.
+- **Upload** PDF, DOCX, TXT, MD (and scanned pages via OCR, English + Hindi).
+- **Live pipeline view**: uploaded → parsing → splitting → embedding → indexing → done, with timings.
+- **Chat with citations**: answers stream token by token; source cards open the exact passage.
+- **Three modes**: `docs` (only your files), `docs_web` (files, then web if not found), `web` (web only).
+- **Document filter**: ask against one or several chosen documents.
+- **Hindi / Hinglish aware**: replies in the language you wrote in.
+- **Suggested questions** generated per document.
+- **Chat history** saved on the server (threads in sidebar).
+- **Smalltalk shortcut**: "hi", "thanks" get an instant reply — no search, no LLM tokens.
+- **Voice input** (browser Web Speech API).
+- **Speed badge**: Time-To-First-Token, retrieval time, total time.
+- **Limits and cache**: daily token quota, rate limits, answer cache (Redis).
+- **Admin usage page** (`/admin`, protected by a token) and optional Sentry error tracking.
+
+## 2. Tech stack
+
+| Layer | Technology | Why |
+|---|---|---|
+| Frontend | Next.js 14, React, Tailwind CSS, react-markdown | Fast UI, SSR-ready, easy Vercel deploy |
+| API | FastAPI (async), Pydantic | Async + SSE streaming, typed |
+| Auth | JWT + bcrypt (10 rounds, off the event loop) | Simple, stateless |
+| Database | PostgreSQL (Neon) / SQLite locally, SQLAlchemy async, Alembic | Users, documents, threads, usage |
+| Vector DB | Qdrant (named vectors: dense + BM25 sparse) | Hybrid search in one store |
+| Embeddings | Gemini `gemini-embedding-001` (768-d); FastEmbed / sentence-transformers as alternatives | Free hosted, strong multilingual |
+| LLM | Groq `openai/gpt-oss-20b` | Very low latency, free tier |
+| Web search | Tavily (primary), DuckDuckGo fallback | Reliable results, graceful fallback |
+| Cache / limits | Redis (Upstash) | Quota, rate limit, answer cache; **fails open** |
+| OCR | Tesseract (eng+hin) via pdf2image | Scanned PDFs and images |
+| Background jobs | Inline by default, Celery optional | Free hosts have no worker |
+| Observability | Prometheus metrics, Grafana, Sentry (optional) | Monitoring |
+| CI/CD | GitHub Actions, Docker, Kubernetes manifests | Reproducible deploys |
+| Hosting | Render (API), Vercel (UI) | Free tier |
+
+## 3. How it was built
+
+The project grew in phases:
+
+1. **Core RAG** — upload, parse, chunk, embed, store in Qdrant, retrieve top chunks, stream a Groq answer with citations and a TTFT badge.
+2. **Quality** — hybrid retrieval (dense + BM25) with RRF fusion, optional reranker, follow-up question rewriting, OCR for scans, golden-set evaluation.
+3. **Production hardening** — per-user isolation on every query, Redis quota/rate limit/cache with circuit breaker, Alembic migrations, Prometheus/Grafana, Docker, Kubernetes, CI.
+4. **Free deployment** — swapped local models for hosted Gemini embeddings (no RAM-hungry model on a 512 MB host), Neon, Qdrant Cloud, Upstash, Render + Vercel.
+5. **Product polish** — AnythingLLM-style UI, server-side chat threads, web search modes, Markdown answers, passage viewer, voice input, suggested questions, smalltalk skip, admin page, Sentry.
+
+Choices driven by constraints: free tier only → no card, small RAM, sleeping server, so heavy local models and paid GPUs were replaced by hosted APIs.
+
+## 4. Architecture
 
 ```
-Upload -> validate (magic bytes, size) -> store file (MinIO/S3) -> DB row "uploaded" -> Celery queue
-Worker -> "processing" -> parse (+OCR for scanned pages) -> chunk -> embed (bge-m3) + BM25 terms -> Qdrant
-       -> "ready" | "failed"  (and the user's cached answers are invalidated)
-
-Chat   -> rate limit -> cache lookup (first questions only) -> token quota check
-       -> [follow-up? LLM rewrites it into a standalone query]
-       -> embed query -> dense search + BM25 search (both user_id-filtered) -> RRF fusion -> top-8
-       -> bge-reranker -> drop below threshold -> top-3 -> compact prompt -> Groq (stream) -> SSE -> UI
-       -> record tokens used, store answer in cache
+Browser (Next.js on Vercel)
+   │  HTTPS + SSE
+   ▼
+FastAPI (Render) ──► Neon Postgres   users, documents, threads, suggestions
+   │            ├──► Qdrant Cloud    chunk vectors (dense + sparse)
+   │            ├──► Upstash Redis   quota, rate limit, cache
+   │            ├──► Gemini API      embeddings
+   │            ├──► Groq API        answer generation
+   │            └──► Tavily / DDG    web search
 ```
 
-SSE events from `POST /chat`: `sources` -> `ttft` -> `token`* -> `done` (or `error`).
-`ttft` is its own event, sent the moment the first non-empty token arrives.
+## 5. How a document is processed
 
 ```
-backend/app/
-  api/         documents.py (upload/list/delete), chat.py (SSE + TTFT), usage.py
-  auth/        JWT register/login/me, get_current_user
-  parsers/     magic-byte validation, PDF/DOCX/TXT/MD extraction
-  chunking/    page-aware RecursiveCharacterTextSplitter
-  embeddings/  local bge-m3 (sentence-transformers)
-  retrieval/   store.py (Qdrant, user_filter on every query), sparse.py (BM25 vectors),
-               fusion.py (RRF), rerank.py (bge-reranker), search.py (retrieve pipeline)
-  llm/         Groq client (stream + complete, retry/backoff), prompts, model routing, follow-up rewrite
-  ocr/         Tesseract OCR (pdf2image + pytesseract, 300 DPI, grayscale/contrast/denoise)
-  workers/     pipeline.py (status lifecycle), ingest.py, tasks.py + celery_app.py, dispatch.py
-  core/        settings, db, security, storage (local + S3/MinIO), cache.py, limits.py (quota + rate limits)
-  models/      SQLAlchemy models
-frontend/      Next.js + Tailwind: login, upload panel, streaming chat, citations, latency badge, token usage
+Upload
+  → validate (magic bytes, size)             parsers/files.py
+  → store file (local disk or S3/MinIO)      core/storage.py
+  → DB row, status "uploaded"
+  → parsing     PDF/DOCX/TXT/MD text; OCR (Tesseract) for scanned pages
+  → splitting   page-aware recursive splitter, 400 chars / 60 overlap
+  → embedding   Gemini dense vectors (batches of 100, L2-normalised)
+                + BM25 sparse terms
+  → indexing    upsert to Qdrant with user_id, doc_id, page, text
+  → done        timings saved; user's cached answers invalidated
+                suggested questions generated (one LLM call)
 ```
+Each stage is written to the DB with timings, so the UI shows a live progress bar. Failures mark the document `failed` with a reason.
 
-## Phase 3 features
+## 6. How a question is answered
 
-| Feature | How it works |
+```
+POST /chat  (SSE)
+  1. smalltalk? ("hi", "thanks") → canned reply, stop
+  2. rate limit → cache lookup → token quota check
+  3. follow-up? → LLM rewrites into a standalone query
+  4. embed query → dense search + BM25 search (user_id [+ doc_ids] filter)
+  5. RRF fusion → keyword rescue → (optional rerank) → top passages
+  6. no good passages and mode allows it → web search (Tavily/DDG)
+  7. build compact prompt (language-aware, Markdown allowed) → Groq stream
+  8. stream events: stage → sources → ttft → token… → done
+  9. record tokens, cache the answer, save the thread
+```
+SSE events: `stage`, `sources`, `ttft`, `token`, `done` (with `ttft_ms`, `retrieval_ms`, `answer_source`, …), `error`.
+
+## 7. Advantages
+
+- **Grounded answers**: every claim comes with a source passage — easy to verify, fewer hallucinations.
+- **Private**: strict per-user filtering at the vector-store level.
+- **Fast**: Groq streaming gives sub-second first token.
+- **Hybrid search**: semantic + keyword catches both meaning and exact terms (names, IDs, numbers).
+- **Multilingual**: English, Hindi, Hinglish queries and OCR.
+- **Free to run**: whole stack on free tiers.
+- **Resilient**: Redis, web search and optional features fail soft; the core chat keeps working.
+- **Observable and testable**: metrics, Sentry, 161 tests, golden-set evals.
+
+## 8. Real-world use cases
+
+- **Students**: ask questions across notes, textbooks and papers.
+- **Support teams**: answer from policy, warranty and shipping documents.
+- **HR / legal / finance**: find clauses and figures in long contracts and reports.
+- **Researchers**: quickly query and cite papers.
+- **Small business**: internal knowledge base without a custom ML team.
+- **Hindi-speaking users**: query documents in Hinglish.
+
+## 9. Project structure
+
+### Root
+| Path | Purpose |
 |---|---|
-| **Hybrid search** | Dense (bge-m3) + BM25 keyword search, fused with Reciprocal Rank Fusion. BM25 uses sparse vectors with Qdrant's IDF modifier, so there is no extra model; tokenization handles Hindi and other Indic scripts. Exact terms (invoice numbers, names, codes) that embeddings miss are now found. |
-| **Reranker** | `BAAI/bge-reranker-v2-m3` (multilingual cross-encoder) re-scores the top-8 candidates; the relevance threshold then applies to its 0-1 score. If it errors, search falls back to dense scores. |
-| **Answer cache** | Redis. Key = user + that user's document version + normalised question. Only first questions are cached (follow-ups depend on the conversation). Uploading or deleting a document bumps the version, so stale answers are never served. Cache hits use no LLM and no tokens. |
-| **Token quota** | Per user per UTC day (`DAILY_TOKEN_QUOTA`, 0 = unlimited). Counts real usage from Groq (estimated if missing, and also when the client disconnects mid-answer). Over the limit: HTTP 429 with `Retry-After`; cached answers are still served. Shown in the UI header and at `GET /usage`. |
-| **Rate limits** | Sliding window in Redis: chat and uploads per user, login/register per client IP. 429 with `Retry-After`. |
-| **Follow-up rewrite** | A short question that refers back ("and how long?") is rewritten by the 8B model into a standalone search query. Standalone questions and first questions cost nothing extra. |
+| `README.md` | This file |
+| `.env.example` | Template of all environment variables (no secrets) |
+| `docker-compose.yml` | Full local stack: Postgres, Redis, Qdrant, MinIO, API, worker, migrate, frontend (+ observability profile) |
+| `render.yaml` | Render deploy blueprint for the API |
+| `pyproject.toml`, `uv.lock`, `.python-version` | Python project metadata and pinned deps (uv) |
+| `.dockerignore`, `.gitignore` | Ignore rules |
+| `.github/workflows/ci.yml` | Run tests on every push/PR |
+| `.github/workflows/eval.yml` | Run retrieval/answer evaluation |
+| `.github/workflows/release.yml` | Build and publish images |
+| `src/rag_application/` | Package stub from the uv template |
 
-Cache, quota and rate limits **fail open**: if Redis is down they are skipped (with a warning log) and chat keeps working.
+### `backend/` — FastAPI service
+| Path | Purpose |
+|---|---|
+| `Dockerfile` (`DockerfileOLD`) | Production image (old version kept for reference) |
+| `.gcloudignore` | Files excluded for Cloud Run builds |
+| `alembic.ini`, `alembic/` | DB migrations: `0001` initial schema, `0002` document stage, `0003` threads + suggestions |
+| `requirements*.txt` | Runtime, dev, and eval dependencies |
+| `pytest.ini` | Test config |
 
-## Run with Docker
+**`backend/app/`**
+| Path | Purpose |
+|---|---|
+| `main.py` | App factory: routers, CORS, middleware, Sentry, LLM/embedder wiring |
+| `api/documents.py` | Upload, list, delete, pipeline status |
+| `api/chat.py` | SSE chat endpoint: modes, smalltalk, cache, quota, web fallback |
+| `api/threads.py` | Server-side chat history |
+| `api/suggestions.py` | Suggested questions per document |
+| `api/usage.py` | Current user's token usage |
+| `api/admin.py` | Admin usage stats (`X-Admin-Token`) |
+| `auth/router.py`, `auth/deps.py` | Register/login/me; `get_current_user` dependency |
+| `core/config.py` | Settings from environment |
+| `core/db.py` | Async engine/session, auto-create |
+| `core/security.py` | Password hashing, JWT |
+| `core/storage.py` | File storage: local or S3/MinIO |
+| `core/cache.py` | Redis answer cache with circuit breaker |
+| `core/limits.py` | Token quota and rate limiting |
+| `core/middleware.py`, `logging.py`, `metrics.py`, `tracing.py` | Request IDs, structured logs, Prometheus, tracing |
+| `models/models.py` | SQLAlchemy tables: User, Document, ChatThread, DocSuggestion, … |
+| `parsers/files.py` | Magic-byte validation and text extraction |
+| `ocr/tesseract.py` | OCR for scanned pages (eng+hin) |
+| `chunking/splitter.py` | Page-aware chunk splitter |
+| `embeddings/factory.py` | Picks embedder via `EMBEDDING_PROVIDER` |
+| `embeddings/gemini.py` | Hosted Gemini embedder (batching, retry, normalise) |
+| `embeddings/fast.py`, `embedder.py`, `hashing.py` | FastEmbed, sentence-transformers, and test/hash embedders |
+| `retrieval/store.py` | Qdrant client, upsert, filtered search |
+| `retrieval/sparse.py` | BM25 sparse vectors |
+| `retrieval/fusion.py` | Reciprocal Rank Fusion |
+| `retrieval/rerank.py` | Optional cross-encoder reranker |
+| `retrieval/search.py` | Full retrieval pipeline |
+| `llm/groq_client.py` | Groq streaming/complete, retry, reasoning effort |
+| `llm/prompts.py` | System prompts, language selection, message builders |
+| `llm/rewrite.py` | Follow-up → standalone query |
+| `llm/smalltalk.py` | Instant replies for greetings/thanks |
+| `websearch/search.py` | Provider dispatcher |
+| `websearch/tavily.py`, `ddg.py` | Tavily and DuckDuckGo backends |
+| `workers/pipeline.py` | Ingestion stages and status updates |
+| `workers/ingest.py` | Ingest entry point |
+| `workers/dispatch.py` | Inline vs Celery dispatch |
+| `workers/tasks.py`, `celery_app.py` | Optional Celery worker |
+
+**`backend/evals/`** — quality measurement: `dataset.py`, `metrics.py`, `pipeline.py`, `ragas_judge.py`, `run_eval.py`, `hinglish_embed_check.py` (compare embedders on Hinglish), `golden/` (sample docs + `qa.jsonl`).
+
+**`backend/tests/`** — 161 tests: ingestion, chunking, hybrid retrieval, isolation between users, cache/quota/limits, Redis breaker, TTFT, OCR, migrations, Tavily, Gemini, web modes, env-example check, and helpers (`conftest.py`, `fakes.py`, …).
+
+### `frontend/` — Next.js app
+| Path | Purpose |
+|---|---|
+| `app/page.tsx` | Main shell: sidebar + chat |
+| `app/login/`, `app/register/` | Auth pages |
+| `app/admin/` | Admin usage dashboard |
+| `app/layout.tsx`, `globals.css` | Root layout, fonts, theme variables, Markdown styles |
+| `components/Chat.tsx` | Streaming chat, composer, tools menu, sources, mic |
+| `components/Sidebar.tsx` | Threads list and navigation |
+| `components/DocsModal.tsx`, `UploadPanel.tsx`, `DocPipeline.tsx` | Document manager, upload, live pipeline |
+| `components/Markdown.tsx` | Safe Markdown rendering |
+| `components/UsageBadge.tsx`, `AuthForm.tsx`, `icons.tsx` | Small UI parts |
+| `lib/api.ts` | Typed API client and SSE reader |
+| `lib/threads.ts`, `lib/pipeline.ts` | Thread and pipeline helpers |
+| `Dockerfile`, `package.json`, `tailwind.config.ts`, `next.config.mjs` | Build/config |
+
+### `deploy/`
+| Path | Purpose |
+|---|---|
+| `k8s/` | Kubernetes manifests (api, worker, frontend, ingress, migrate job, config, example secret) |
+| `observability/` | Prometheus config, alert rules, Grafana dashboards |
+
+## 10. Run locally
 
 ```bash
-cp .env.example .env        # set GROQ_API_KEY and JWT_SECRET
-docker compose up --build
-```
+git clone https://github.com/gaurav712-gujjar/rag-application.git
+cd rag-application
+cp .env.example .env          # fill GROQ_API_KEY, GEMINI_API_KEY (and optional TAVILY_API_KEY)
 
-- Services: api, worker (Celery), frontend, postgres, redis, qdrant, minio
-- App: http://localhost:3000, API docs: http://localhost:8000/docs, MinIO console: http://localhost:9001 (minioadmin / minioadmin, change for real deployments)
-- Uploads return `202`; the UI shows `uploaded -> processing -> ready/failed` while the worker runs.
-- The image installs `tesseract-ocr` with English + Hindi packs. For more languages add `tesseract-ocr-<lang>` in `backend/Dockerfile` and extend `OCR_LANG`.
-- First start downloads bge-m3 (~2 GB) and bge-reranker-v2-m3 (~2 GB), cached in the `hf_cache` volume, so the API takes a few minutes to become ready.
-- **Upgrading from Phase 1/2:** the Qdrant collection schema changed (named dense + bm25 vectors) and now defaults to `chunks_hybrid`. Existing documents must be re-uploaded (or run `docker compose down -v` to start clean).
-- Behind a reverse proxy, run uvicorn with `--proxy-headers` so the login rate limit sees real client IPs.
-
-## Run locally (no Docker)
-
-```bash
-# Qdrant (+ Redis if you want cache/quota/rate limits)
-docker run -p 6333:6333 qdrant/qdrant
-docker run -p 6379:6379 redis:7-alpine
-
-# Backend (uses SQLite, local file storage and INGEST_MODE=inline by default: no MinIO/worker needed;
-# OCR needs the tesseract + poppler system packages, otherwise scanned PDFs fail with a clear message)
+# Backend
 cd backend
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-cp ../.env.example .env     # set GROQ_API_KEY and JWT_SECRET
-uvicorn app.main:app --reload
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 
-# Frontend
-cd frontend && npm install && npm run dev
+# Frontend (new terminal)
+cd frontend
+echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
+npm install && npm run dev
 ```
+Or the whole stack: `docker compose up --build`.
 
-On a small machine set `RERANK_ENABLED=false` to skip the reranker (saves ~2 GB and some latency).
+## 11. Deploy (free)
 
-## Phase 4: observability, migrations, eval, CI/CD, deploy
+| Service | Role | Notes |
+|---|---|---|
+| Neon | Postgres | `DATABASE_URL=postgresql+asyncpg://…?ssl=require` |
+| Qdrant Cloud | Vectors | `QDRANT_URL`, `QDRANT_API_KEY` |
+| Upstash | Redis | `REDIS_URL=rediss://default:PASSWORD@host:6379` |
+| Groq / Gemini / Tavily | LLM / embeddings / web | API keys |
+| Render | API | Free web service; sleeps after 15 min idle — ping `/health` with UptimeRobot |
+| Vercel | Frontend | Root directory `frontend`, `NEXT_PUBLIC_API_URL=<render url>` |
 
-**Logs.** JSON by default (`LOG_FORMAT=text` for dev). Every request gets an `X-Request-ID` (accepted from the caller if valid, else generated), included in each log line.
+Set Render `CORS_ORIGINS` to the exact Vercel URL, no trailing slash. A sleeping Render service shows up as a CORS/"Failed to fetch" error.
 
-**Metrics.** `GET /metrics` (Prometheus). Set `METRICS_TOKEN` to require `Authorization: Bearer <token>`. Worker metrics on port `WORKER_METRICS_PORT` (9100). Key series: `chat_ttft_seconds{source}`, `chat_retrieval_seconds`, `chat_rerank_seconds`, `chat_requests_total{outcome}`, `llm_tokens_total{model,kind}`, `answer_cache_lookups_total`, `reranker_fallbacks_total`, `redis_unavailable_total`, `documents_ingested_total`, `http_*`. Do not expose `/metrics` publicly (the k8s ingress doesn't).
+## 12. Environment variables
 
-**Dashboards and alerts.** `docker compose --profile observability up` starts Prometheus (:9090) and Grafana (:3001, dashboard "DocChat overview" is provisioned). Alert rules: `deploy/observability/alerts.yml`.
+See `.env.example` for the full list. Key ones:
 
-**Tracing.** Set `OTEL_EXPORTER_OTLP_ENDPOINT` (+ `OTEL_EXPORTER_OTLP_HEADERS`) to export to Langfuse, Tempo, Jaeger, etc. Spans: `chat > rewrite_query, retrieval(embed_query, vector_search, rerank), llm` and `ingest_document > parse, embed, upsert`. Question/answer text is NOT put in spans unless `TRACE_CONTENT=true`.
+| Variable | Meaning |
+|---|---|
+| `DATABASE_URL` | SQLAlchemy URL (Postgres or SQLite) |
+| `JWT_SECRET` | Long random string for tokens |
+| `GROQ_API_KEY`, `LLM_REASONING_EFFORT` | LLM access; `low` for faster answers |
+| `EMBEDDING_PROVIDER` | `gemini` \| `fastembed` \| `local` |
+| `GEMINI_API_KEY` | Hosted embeddings |
+| `QDRANT_URL`, `QDRANT_API_KEY` | Vector store |
+| `REDIS_URL` | Quota/limits/cache (empty = disabled, fails open) |
+| `TAVILY_API_KEY` | Web search (empty = DuckDuckGo) |
+| `CORS_ORIGINS` | Allowed frontend origin |
+| `ADMIN_TOKEN` | Enables `/admin/usage` |
+| `SENTRY_DSN` | Error tracking |
+| `INGEST_MODE` | `inline` or `celery` |
 
-**Migrations (Alembic).**
+## 13. Testing and evaluation
 
 ```bash
-cd backend
-alembic upgrade head                 # new database
-alembic stamp head                   # database created earlier by Phase 1-3 create_all: adopt it, don't recreate
-alembic revision --autogenerate -m "msg"
+cd backend && pip install -r requirements-dev.txt && pytest      # 161 tests
+python -m evals.run_eval                                         # golden-set retrieval/answer eval
+GEMINI_API_KEY=… python -m evals.hinglish_embed_check            # Hinglish embedding comparison
 ```
+CI runs tests on every push; `eval.yml` runs the evaluation.
 
-Production/compose/k8s run with `DB_AUTO_CREATE=false`; a one-shot `migrate` service/Job runs `alembic upgrade head` before api/worker start.
+## 14. Security notes
 
-**Eval.**
+- **Never commit `.env` or keys.** Keep secrets in Render/Vercel environment settings.
+- Rotate any secret that was ever shared in chat or logs.
+- Every vector query is filtered by `user_id`; uploads are validated by magic bytes.
+- Rate limits and daily token quotas protect free-tier API budgets.
+- Admin endpoint is disabled unless `ADMIN_TOKEN` is set.
 
-```bash
-cd backend
-python -m evals.run_eval --fast                       # no model download, hashing embedder: smoke test of the harness only
-python -m evals.run_eval --min hit_at_k=0.8 --min mrr=0.6   # real bge-m3 + reranker (downloads models)
-python -m evals.run_eval --generate                   # also calls Groq to check answers
-pip install -r requirements-eval.txt && python -m evals.run_eval --ragas   # LLM-judge metrics: costs Groq tokens
-```
+## 15. Limitations and roadmap
 
-Golden set: `backend/evals/golden/` (16 answerable incl. 3 Hindi, 4 unanswerable). Results go to `evals/results/` (gitignored). Exit code 1 if a `--min` gate fails or can't be measured. `--fast` abstain metrics are not meaningful.
+- Free Render sleeps when idle → first request after idle is slow.
+- Reranker is off on the free tier (RAM).
+- Ideas: table-aware parsing, per-document sharing, conversation memory summaries, more file types, usage analytics.
 
-**CI/CD (`.github/workflows`).**
-- `ci.yml`: backend tests, frontend typecheck + build, docker builds on push/PR.
-- `release.yml`: on tag, builds and pushes images to GHCR. Optional deploy job runs only if repo variable `DEPLOY_ENABLED=true` and secret `KUBE_CONFIG` are set.
-- `eval.yml`: manual/scheduled real-model eval (needs `GROQ_API_KEY` secret for `--generate`).
+---
 
-**Kubernetes (`deploy/k8s`, kustomize).**
-
-```bash
-cd deploy/k8s
-# 1. set real image names
-kustomize edit set image ghcr.io/OWNER/REPO/backend=ghcr.io/<you>/<repo>/backend:<tag> ghcr.io/OWNER/REPO/frontend=ghcr.io/<you>/<repo>/frontend:<tag>
-# 2. create secrets (see secret.example.yaml; it is not part of the kustomization)
-kubectl apply -f namespace.yaml && kubectl -n docchat create secret generic docchat-secrets --from-literal=JWT_SECRET=... --from-literal=GROQ_API_KEY=... # + DATABASE_URL, S3_*, QDRANT_API_KEY as in secret.example.yaml
-# 3. edit configmap.yaml (QDRANT_URL, REDIS_URL, S3_ENDPOINT, CORS_ORIGINS) and ingress.yaml (host)
-kubectl apply -k .
-```
-
-Postgres, Redis, Qdrant and S3 are expected as managed/external services. The migrate Job runs first; set `PRELOAD_MODELS=1` build arg to bake models into the backend image (faster cold start, ~4 GB larger).
-
-### Not verified yet (no Docker daemon / GPU / API keys in the build sandbox)
-`docker compose up` and image builds, real bge-m3/reranker/Groq/Redis/MinIO/Celery runs, Hindi OCR, real-model eval numbers (`RELEVANCE_THRESHOLD=0.35` and `RERANK_THRESHOLD=0.2` are starting guesses: calibrate with `evals.run_eval`), Python 3.11 (tested on 3.13), GitHub Actions runs, Grafana rendering, release deploy job, k8s resource sizes, Langfuse ingestion, RAGAS with a real judge.
-
-## Tests
-
-```bash
-cd backend && pytest
-```
-
-Uses fake embedder/LLM/reranker, in-memory Qdrant and fakeredis, so no model download, API key or
-Redis is needed. Covers chunking, per-user isolation (dense, hybrid, cache, quota, rate limits), TTFT,
-upload validation, delete cascade, auth, OCR fallback, the queued ingestion flow, BM25/RRF/hybrid
-search (incl. Hindi and IDF), reranking and its fallback, follow-up rewrite, cache invalidation,
-token accounting (incl. client disconnect), rate limiting and Redis-outage behaviour.
-
-## Token saving
-
-top-8 retrieved, only top-3 above the relevance threshold sent; no relevant chunk means no LLM call;
-short system prompt; compact `[n] file pPage: text` context; `max_tokens=400`; last 2 chat turns only;
-8B model by default, 70B only for complex questions; repeated questions served from cache;
-per-user daily quota; token usage logged per request.
-
-## Known limits
-
-- OCR covers PDFs only (not standalone images), at most `OCR_MAX_PAGES` pages per file, and is slow on big scans
-- No UI "retry" button for failed documents (re-uploading the same file retries it)
-- The reranker adds latency to TTFT (it runs before the first token); it shows up inside "Retrieval" in the badge
-- The token quota is soft: a request that starts under the limit may finish and push usage slightly over it
-- Single uvicorn process per container (Prometheus metrics are per-process); scale with replicas, not `--workers`
-- Celery worker: keep `--concurrency=1` (metrics port 9100 is per process)
-- Chunk size is measured in characters (2000 chars is roughly 500 tokens)
+Built by [gaurav712-gujjar](https://github.com/gaurav712-gujjar).
