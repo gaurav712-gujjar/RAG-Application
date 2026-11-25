@@ -27,6 +27,9 @@ class Settings(BaseSettings):
 
     # --- embeddings ---
     gemini_api_key: str = ""
+    tavily_api_key: str = ""  # web search via Tavily; empty = DuckDuckGo only
+    sentry_dsn: str = ""  # empty = no error reporting
+    admin_token: str = ""  # enables GET /admin/usage (sent as X-Admin-Token); empty = endpoint is off
     embedding_model: str = "BAAI/bge-m3"
     embedding_dim: int = 1024
     embedding_provider: str = "local" 

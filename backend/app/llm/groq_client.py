@@ -53,8 +53,11 @@ def _usage_from_chunk(chunk):
 
 
 class GroqLLM:
-    def __init__(self, api_key: str, max_retries: int = 3, timeout_s: float = 30.0):
+    def __init__(
+        self, api_key: str, max_retries: int = 3, timeout_s: float = 30.0, reasoning_effort: str = ""
+    ):
         self.api_key = api_key
+        self.extra_body = {"reasoning_effort": reasoning_effort} if reasoning_effort else None
         self.max_retries = max_retries
         # We do our own retry loop, so disable the SDK's.
         self.client = groq.AsyncGroq(api_key=api_key, max_retries=0, timeout=timeout_s) if api_key else None
@@ -69,7 +72,8 @@ class GroqLLM:
         while True:
             try:
                 res = await self.client.chat.completions.create(
-                    model=model, messages=messages, max_tokens=max_tokens, temperature=temperature
+                    model=model, messages=messages, max_tokens=max_tokens, temperature=temperature,
+                    extra_body=self.extra_body,
                 )
                 usage = res.usage
                 return LLMCompletion(
@@ -101,6 +105,7 @@ class GroqLLM:
                     stream=True,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    extra_body=self.extra_body,
                 )
                 async for chunk in stream:
                     usage = _usage_from_chunk(chunk)

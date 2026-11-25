@@ -60,3 +60,26 @@ class Document(Base):
     # milliseconds per finished stage, e.g. {"parse_ms": 120, "pages": 12, "chunks": 30}
     timings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ChatThread(Base):
+    """A saved conversation. The messages are one JSON blob: the app only ever loads or saves a whole chat."""
+
+    __tablename__ = "chat_threads"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)  # created by the browser
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(120), default="New chat")
+    messages: Mapped[list] = mapped_column(JSON, default=list)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DocSuggestion(Base):
+    """Starter questions for a document, written once by the LLM and then kept."""
+
+    __tablename__ = "doc_suggestions"
+
+    doc_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    questions: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

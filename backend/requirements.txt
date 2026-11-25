@@ -31,3 +31,4 @@ opentelemetry-sdk>=1.27
 opentelemetry-exporter-otlp-proto-http>=1.27
 
 ddgs>=9.0  # web search (DuckDuckGo)
+sentry-sdk>=2.0  # error alerts (only used when SENTRY_DSN is set)

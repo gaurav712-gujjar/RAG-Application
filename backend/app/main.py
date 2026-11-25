@@ -7,7 +7,7 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat, documents, usage
+from app.api import admin, chat, documents, suggestions, threads, usage
 from app.auth import router as auth_router
 from app.core.cache import AnswerCache
 from app.core.config import get_settings
@@ -25,6 +25,13 @@ from app.retrieval.store import VectorStore, make_client
 
 settings = get_settings()
 setup_logging(settings.log_level, settings.log_format)
+if settings.sentry_dsn:  # error alerts; no personal data is sent
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.0, send_default_pii=False)
+    except ImportError:
+        pass
 logger = logging.getLogger(__name__)
 
 
@@ -81,6 +88,7 @@ async def lifespan(app: FastAPI):
                 settings.groq_api_key,
                 max_retries=settings.llm_max_retries,
                 timeout_s=settings.llm_timeout_s,
+                reasoning_effort=settings.llm_reasoning_effort,  # "" = not sent
         )
     yield
     if created_redis is not None:
@@ -102,6 +110,9 @@ app.include_router(auth_router.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
 app.include_router(usage.router)
+app.include_router(threads.router)
+app.include_router(suggestions.router)
+app.include_router(admin.router)
 
 
 @app.get("/health")

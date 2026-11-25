@@ -17,6 +17,7 @@ from app.llm.prompts import (
     NO_WEB_RESULTS, NOT_FOUND, build_messages, build_web_messages, choose_model, retrieval_query, trim_history,
 )
 from app.llm.rewrite import needs_rewrite, rewrite_query
+from app.llm.smalltalk import smalltalk
 from app.models import User
 from app.retrieval.search import retrieve
 from app.websearch.search import web_search
@@ -68,8 +69,10 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
     if use_cache:
         metrics.CACHE_LOOKUPS.labels("hit" if cached is not None else "miss").inc()
 
+    chit = smalltalk(req.question)  # "hi", "thanks": answered without search or LLM
+
     # Cached answers cost no tokens, so they are served even when the quota is used up.
-    if cached is None and quota is not None:
+    if cached is None and chit is None and quota is not None:
         try:
             await quota.check(user_id)
         except QuotaExceeded as e:
@@ -99,6 +102,20 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
         partial_chars = 0
         llm_span = None
         try:
+            if chit is not None:
+                outcome = "smalltalk"
+                ttft_ms = _ms(t0)
+                yield sse("sources", [])
+                yield sse("ttft", {"ttft_ms": ttft_ms, "retrieval_ms": 0, "cached": False})
+                yield sse("token", {"t": chit})
+                yield sse(
+                    "done",
+                    {"ttft_ms": ttft_ms, "retrieval_ms": 0, "rerank_ms": 0, "total_ms": _ms(t0), "model": None,
+                     "prompt_tokens": 0, "completion_tokens": 0, "cached": False, "answer_source": "docs",
+                     "web_available": False},
+                )
+                return
+
             if cached is not None:
                 ttft_ms = _ms(t0)
                 outcome = "cached"
@@ -143,7 +160,8 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
                     metrics.CHAT_RERANK.observe(r.rerank_ms / 1000)
                 hits = r.hits
                 sources = [
-                    {"n": i, "filename": h.filename, "page": h.page, "doc_id": h.doc_id, "score": round(h.score, 3)}
+                    {"n": i, "filename": h.filename, "page": h.page, "doc_id": h.doc_id, "score": round(h.score, 3),
+                     "text": h.text[:700]}
                     for i, h in enumerate(hits, start=1)
                 ]
                 yield sse("sources", sources)
@@ -276,7 +294,7 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
             if quota is not None and charge:
                 await quota.add(user_id, charge)
             metrics.CHAT_REQUESTS.labels(outcome).inc()
-            if outcome in ("ok", "cached", "not_found"):
+            if outcome in ("ok", "cached", "not_found", "smalltalk"):
                 metrics.CHAT_TOTAL.observe(time.perf_counter() - t0)
             if llm_span is not None:
                 llm_span.end()

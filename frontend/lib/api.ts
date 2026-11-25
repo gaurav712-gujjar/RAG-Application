@@ -36,6 +36,7 @@ export type Source = {
   score?: number;
   kind?: "web";
   url?: string;
+  text?: string; // the passage the answer used (documents only)
 };
 
 export type Mode = "docs" | "docs_web" | "web";
@@ -143,4 +144,34 @@ export async function* streamChat(
       if (data) yield { event, data: JSON.parse(data) };
     }
   }
+}
+
+
+// ---- chat history on the server ----
+export type ThreadDto = { id: string; title: string; updated_at: string; messages: any[] };
+export const listThreads = () => request<ThreadDto[]>("/threads");
+export const saveThread = (id: string, title: string, messages: unknown[]) =>
+  request<ThreadDto>(`/threads/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, messages }),
+  });
+export const deleteThreadOnServer = (id: string) => request<void>(`/threads/${id}`, { method: "DELETE" });
+
+// ---- starter questions ----
+export const getSuggestions = (docId: string) => request<{ questions: string[] }>(`/documents/${docId}/suggestions`);
+
+// ---- owner-only numbers ----
+export type AdminUsage = {
+  date: string;
+  users: number;
+  documents: number;
+  tokens_today: number;
+  daily_limit: number;
+  per_user: { email: string; tokens: number }[];
+};
+export async function adminUsage(token: string): Promise<AdminUsage> {
+  const res = await fetch(`${API_URL}/admin/usage`, { headers: { "X-Admin-Token": token } });
+  if (!res.ok) throw await errorFrom(res);
+  return (await res.json()) as AdminUsage;
 }

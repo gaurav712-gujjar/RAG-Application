@@ -1,10 +1,10 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
-import { ApiError, Doc, HistoryTurn, Latency, Mode, Source, listDocs, streamChat } from "@/lib/api";
+import { ApiError, Doc, HistoryTurn, Latency, Mode, Source, getSuggestions, listDocs, streamChat } from "@/lib/api";
 import type { Message } from "@/lib/threads";
 import Markdown from "./Markdown";
-import { CheckIcon, CopyIcon, FileIcon, GlobeIcon, MenuIcon, PlusIcon, SendIcon } from "./icons";
+import { CheckIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, MenuIcon, MicIcon, PlusIcon, SendIcon } from "./icons";
 
 const sec = (ms?: number) => (ms === undefined || ms === null ? "–" : `${(ms / 1000).toFixed(2)} s`);
 const STAGE_TEXT = {
@@ -19,6 +19,7 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "web", label: "Web", hint: "Search the web only" },
 ];
 const MODE_KEY = "docchat_mode";
+const VOICE_KEY = "docchat_voice";
 const STARTERS = [
   "Summarize my documents",
   "What are the key points?",
@@ -112,7 +113,7 @@ function citedSources(m: Message): Source[] {
   return m.content.startsWith("Not found") ? [] : all.slice(0, 1);
 }
 
-function SourceCard({ s }: { s: Source }) {
+function SourceCard({ s, onOpen }: { s: Source; onOpen: (s: Source) => void }) {
   const web = s.kind === "web";
   const body = (
     <>
@@ -131,8 +132,37 @@ function SourceCard({ s }: { s: Source }) {
     <a href={s.url} target="_blank" rel="noopener noreferrer" className={`${cls} hover:border-ink/40`}>
       {body}
     </a>
+  ) : s.text ? (
+    <button type="button" onClick={() => onOpen(s)} className={`${cls} text-left hover:border-ink/40`} title="Show the passage">
+      {body}
+    </button>
   ) : (
     <div className={cls}>{body}</div>
+  );
+}
+
+/** The exact passage an answer used, so a claim can be checked against the document. */
+function PassageDialog({ s, onClose }: { s: Source; onClose: () => void }) {
+  useEffect(() => {
+    const esc = (e: globalThis.KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/40 p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div role="dialog" aria-modal="true" aria-label="Source passage" className="flex max-h-[80vh] w-full max-w-xl flex-col rounded-2xl bg-panel shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{s.filename}</p>
+            <p className="text-xs text-muted">Page {s.page} · source [{s.n}]</p>
+          </div>
+          <button onClick={onClose} aria-label="Close" className="rounded-md p-1.5 text-muted hover:bg-side hover:text-ink">
+            <CloseIcon />
+          </button>
+        </div>
+        <p className="overflow-y-auto whitespace-pre-wrap px-5 py-4 text-sm leading-7">{s.text}</p>
+      </div>
+    </div>
   );
 }
 
@@ -179,6 +209,12 @@ export default function Chat({
   const [docs, setDocs] = useState<Doc[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set()); // empty = search all documents
   const [menuOpen, setMenuOpen] = useState(false);
+  const [passage, setPassage] = useState<Source | null>(null);
+  const [suggest, setSuggest] = useState<string[]>([]);
+  const [micOk, setMicOk] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceLang, setVoiceLang] = useState<"en-IN" | "hi-IN">("en-IN");
+  const recRef = useRef<any>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -205,6 +241,72 @@ export default function Chat({
       /* ignore */
     }
   };
+
+  // Voice input uses the browser's own speech recognition (Chrome, Edge, Safari); hidden elsewhere.
+  useEffect(() => {
+    const w = window as any;
+    setMicOk(!!(w.SpeechRecognition || w.webkitSpeechRecognition));
+    try {
+      const v = window.localStorage.getItem(VOICE_KEY);
+      if (v === "hi-IN" || v === "en-IN") setVoiceLang(v);
+    } catch {
+      /* ignore */
+    }
+    return () => recRef.current?.abort?.();
+  }, []);
+  const chooseVoice = (v: "en-IN" | "hi-IN") => {
+    setVoiceLang(v);
+    try {
+      window.localStorage.setItem(VOICE_KEY, v);
+    } catch {
+      /* ignore */
+    }
+  };
+  function toggleMic() {
+    const w = window as any;
+    const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!SR) return;
+    if (listening) {
+      recRef.current?.stop();
+      return;
+    }
+    const rec = new SR();
+    rec.lang = voiceLang;
+    rec.interimResults = true;
+    rec.continuous = false;
+    const base = input.trim() ? `${input.trim()} ` : "";
+    rec.onresult = (e: any) => {
+      let said = "";
+      for (let i = 0; i < e.results.length; i++) said += e.results[i][0].transcript;
+      setInput((base + said).slice(0, 2000));
+      requestAnimationFrame(growTextarea);
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    recRef.current = rec;
+    setListening(true);
+    try {
+      rec.start();
+    } catch {
+      setListening(false);
+    }
+  }
+
+  // Starter questions written from the documents (one small LLM call per document, then stored).
+  useEffect(() => {
+    if (messages.length > 0 || docs.length === 0) return;
+    const ids = selected.size ? [...selected] : docs.slice(0, 2).map((d) => d.id);
+    let alive = true;
+    Promise.allSettled(ids.map((id) => getSuggestions(id))).then((res) => {
+      if (!alive) return;
+      const qs = res.flatMap((r) => (r.status === "fulfilled" ? r.value.questions : []));
+      setSuggest([...new Set(qs)].slice(0, 4));
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docs, selected, messages.length === 0]);
 
   const loadDocs = async () => {
     try {
@@ -252,6 +354,7 @@ export default function Chat({
     e?.preventDefault();
     const question = input.trim();
     if (!question || busy) return;
+    recRef.current?.stop?.();
     setInput("");
     requestAnimationFrame(growTextarea);
     ask(question, mode, messages);
@@ -379,7 +482,7 @@ export default function Chat({
                     Add documents
                   </button>
                 )}
-                {STARTERS.map((s) => (
+                {(suggest.length ? suggest : STARTERS).map((s) => (
                   <button
                     key={s}
                     onClick={() => !busy && ask(s, mode, messages)}
@@ -426,7 +529,7 @@ export default function Chat({
                     <p className="mb-2 text-xs font-medium text-muted">Sources</p>
                     <div className="flex flex-wrap gap-2">
                       {citedSources(m).map((s) => (
-                        <SourceCard key={s.n} s={s} />
+                        <SourceCard key={s.n} s={s} onOpen={setPassage} />
                       ))}
                     </div>
                   </div>
@@ -506,6 +609,24 @@ export default function Chat({
                   >
                     <FileIcon className="text-done" /> Upload or manage documents
                   </button>
+                  {micOk && (
+                    <>
+                      <p className="px-3 pb-1 pt-3 text-xs font-medium text-muted">Voice language</p>
+                      <div className="flex gap-2 px-3 pb-1">
+                        {([["en-IN", "English"], ["hi-IN", "हिन्दी"]] as const).map(([v, label]) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => chooseVoice(v)}
+                            aria-pressed={voiceLang === v}
+                            className={`rounded-full border px-3 py-1 text-xs ${voiceLang === v ? "border-ink bg-ink text-panel" : "border-line hover:border-ink/40"}`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                   <p className="px-3 pb-1 pt-3 text-xs font-medium text-muted">Where to look</p>
                   {MODES.map((o) => (
                     <button
@@ -551,6 +672,18 @@ export default function Chat({
             <span className="min-w-0 flex-1 truncate text-xs text-muted">
               {mode !== "web" && selected.size > 0 ? `${selected.size} document${selected.size === 1 ? "" : "s"} selected` : ""}
             </span>
+            {micOk && (
+              <button
+                type="button"
+                onClick={toggleMic}
+                aria-pressed={listening}
+                aria-label={listening ? "Stop voice input" : "Voice input"}
+                title={voiceLang === "hi-IN" ? "Voice input (हिन्दी)" : "Voice input (English)"}
+                className={`grid h-9 w-9 place-items-center rounded-full ${listening ? "bg-bad/15 text-bad" : "text-muted hover:bg-side hover:text-ink"}`}
+              >
+                <MicIcon />
+              </button>
+            )}
             <button
               disabled={busy || !input.trim()}
               aria-label={busy ? "Answering" : "Send"}
@@ -561,6 +694,7 @@ export default function Chat({
           </div>
         </div>
       </form>
+      {passage && <PassageDialog s={passage} onClose={() => setPassage(null)} />}
     </div>
   );
 }

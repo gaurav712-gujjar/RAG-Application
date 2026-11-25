@@ -28,7 +28,7 @@ from qdrant_client import AsyncQdrantClient  # noqa: E402
 from app.core.db import Base, engine, init_db  # noqa: E402
 from fakeredis import FakeAsyncRedis  # noqa: E402
 
-from app.core.cache import AnswerCache  # noqa: E402
+from app.core.cache import AnswerCache, reset_breaker  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.limits import RateLimiter, TokenQuota  # noqa: E402
 from app.core.storage import get_storage  # noqa: E402
@@ -43,6 +43,7 @@ settings = get_settings()
 async def ctx():
     """Fresh DB + in-memory Qdrant + fake embedder/LLM per test."""
     SPANS.clear()
+    reset_breaker()  # a Redis outage in one test must not switch Redis off in the next
     await init_db()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

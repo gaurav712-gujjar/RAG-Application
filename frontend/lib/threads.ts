@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Latency, Source } from "./api";
+import { Latency, Source, deleteThreadOnServer, listThreads, saveThread } from "./api";
 
 export type Message = {
   role: "user" | "assistant";
@@ -21,7 +21,7 @@ export type Thread = { id: string; title: string; updatedAt: number; messages: M
 
 const KEY = "docchat_threads_v1";
 const MAX_THREADS = 30;
-const MAX_MESSAGES = 40;
+const MAX_MESSAGES = 60;
 
 const uid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
@@ -68,30 +68,72 @@ const titleOf = (messages: Message[]) => {
   return first ? (first.length > 48 ? `${first.slice(0, 48)}…` : first) : "New chat";
 };
 
-/** Chat history kept in this browser (not on the server). */
+const toMs = (iso: string) => {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? Date.now() : t;
+};
+const quiet = () => undefined; // a failed background sync is retried on the next change, never shown
+
+/** Chat history. The server is the source of truth (so chats follow you across devices); this
+ *  browser keeps a copy so the list shows instantly and still works if the server is slow. */
 export function useThreads() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeId, setActiveId] = useState("");
   const [ready, setReady] = useState(false);
   const activeRef = useRef("");
   activeRef.current = activeId;
+  const dirty = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    const saved = read().map((t) => ({ ...t, messages: t.messages.map((m) => ({ ...m, streaming: false })) }));
+    let alive = true;
+    const local = read().map((t) => ({ ...t, messages: t.messages.map((m) => ({ ...m, streaming: false })) }));
     const fresh = blank();
-    setThreads([fresh, ...saved]);
+    setThreads([fresh, ...local]);
     setActiveId(fresh.id);
     setReady(true);
+
+    listThreads()
+      .then((remote) => {
+        if (!alive) return;
+        const byId = new Map<string, Thread>();
+        for (const t of local) {
+          byId.set(t.id, t);
+          dirty.current.add(t.id); // chats only this browser has are uploaded below
+        }
+        for (const r of remote) {
+          byId.set(r.id, { id: r.id, title: r.title, updatedAt: toMs(r.updated_at), messages: r.messages as Message[] });
+          dirty.current.delete(r.id);
+        }
+        setThreads((cur) => {
+          const open = cur.filter((t) => t.id === fresh.id);
+          const mine = new Map(cur.map((t) => [t.id, t]));
+          const merged = [...byId.values()].map((t) => mine.get(t.id) ?? t); // keep edits made while loading
+          return [...open, ...merged.filter((t) => t.id !== fresh.id)];
+        });
+      })
+      .catch(quiet);
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  // Save shortly after the last change, so a streaming answer does not rewrite storage per token.
+  // Save shortly after the last change, so a streaming answer does not write per token.
   useEffect(() => {
     if (!ready) return;
-    const t = setTimeout(() => write(threads), 400);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => {
+      write(threads);
+      for (const t of threads) {
+        if (!dirty.current.has(t.id) || t.messages.length === 0) continue;
+        if (t.messages.some((m) => m.streaming)) continue; // wait for the answer to finish
+        dirty.current.delete(t.id);
+        saveThread(t.id, t.title, t.messages.slice(-MAX_MESSAGES).map(slim)).catch(() => dirty.current.add(t.id));
+      }
+    }, 800);
+    return () => clearTimeout(timer);
   }, [threads, ready]);
 
   const update = useCallback((id: string, fn: (m: Message[]) => Message[]) => {
+    dirty.current.add(id);
     setThreads((all) =>
       all.map((t) => {
         if (t.id !== id) return t;
@@ -112,6 +154,8 @@ export function useThreads() {
   }, []);
 
   const remove = useCallback((id: string) => {
+    dirty.current.delete(id);
+    deleteThreadOnServer(id).catch(quiet);
     setThreads((all) => {
       const rest = all.filter((t) => t.id !== id);
       if (id !== activeRef.current) return rest;
