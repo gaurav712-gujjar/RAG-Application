@@ -78,7 +78,7 @@ function PromptPanel() {
   const text = useTyping(PROMPTS);
   return (
     <div className="auth-art relative hidden overflow-hidden rounded-[28px] md:grid md:place-items-center" aria-hidden>
-      <div className="flex w-[min(86%,520px)] items-center gap-3 rounded-2xl bg-white/90 py-3.5 pl-5 pr-3.5 shadow-lg backdrop-blur">
+      <div className="flex w-[min(86%,520px)] items-center gap-3 rounded-2xl bg-white/90 dark:bg-panel/90 py-3.5 pl-5 pr-3.5 shadow-lg backdrop-blur">
         <p className="min-h-[1.5rem] flex-1 text-[15px] leading-6 text-ink">
           {text}
           <span className="caret ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[3px] bg-done" />
