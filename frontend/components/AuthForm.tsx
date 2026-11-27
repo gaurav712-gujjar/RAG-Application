@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { authenticate, tryDemo } from "@/lib/api";
 import { ChatIcon, FileIcon } from "./icons";
 
@@ -25,24 +25,68 @@ const COPY = {
   },
 } as const;
 
-/** A small, static preview of an answer, so the sign-in screen shows what the app does. */
-function Preview() {
+const PROMPTS = [
+  "Ask DocChat anything about your documents.",
+  "What is the refund window in this policy?",
+  "इस दस्तावेज़ में वारंटी कितने महीने की है?",
+  "Summarise this contract in five bullet points.",
+  "Order ORD-48213 kab tak deliver hoga?",
+];
+
+/** Types each prompt, holds it, erases it, then moves to the next. Shows the first one still if motion is reduced. */
+function useTyping(phrases: string[]) {
+  const [text, setText] = useState(phrases[0]);
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let i = 0;
+    let n = 0;
+    let erasing = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      const phrase = Array.from(phrases[i]); // Hindi letters are multi-code-unit: step by character
+      if (!erasing) {
+        n += 1;
+        setText(phrase.slice(0, n).join(""));
+        if (n >= phrase.length) {
+          erasing = true;
+          timer = setTimeout(tick, 1800);
+          return;
+        }
+        timer = setTimeout(tick, 45);
+      } else {
+        n -= 1;
+        setText(phrase.slice(0, n).join(""));
+        if (n <= 0) {
+          erasing = false;
+          i = (i + 1) % phrases.length;
+          timer = setTimeout(tick, 350);
+          return;
+        }
+        timer = setTimeout(tick, 22);
+      }
+    };
+    setText("");
+    timer = setTimeout(tick, 400);
+    return () => clearTimeout(timer);
+  }, [phrases]);
+  return text;
+}
+
+/** The colour panel on the right: a prompt box that types example questions. */
+function PromptPanel() {
+  const text = useTyping(PROMPTS);
   return (
-    <div className="w-full max-w-sm space-y-4" aria-hidden>
-      <p className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-br-md bg-panel px-4 py-2.5 text-sm shadow-sm">
-        How many days do I have to ask for a refund?
-      </p>
-      <div className="rounded-2xl bg-panel p-4 text-sm shadow-sm">
-        <p className="leading-6">
-          You have <b>14 days</b> from delivery to request a refund. Items must be unused. [1]
+    <div className="auth-art relative hidden overflow-hidden rounded-[28px] md:grid md:place-items-center" aria-hidden>
+      <div className="flex w-[min(86%,520px)] items-center gap-3 rounded-2xl bg-white/90 py-3.5 pl-5 pr-3.5 shadow-lg backdrop-blur">
+        <p className="min-h-[1.5rem] flex-1 text-[15px] leading-6 text-ink">
+          {text}
+          <span className="caret ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[3px] bg-done" />
         </p>
-        <div className="mt-3 flex items-center gap-2.5 rounded-xl border border-line px-2.5 py-2">
-          <span className="grid h-7 w-7 place-items-center rounded-lg bg-side text-done">
-            <FileIcon width={15} height={15} />
-          </span>
-          <span className="text-[13px] font-medium">refund_policy.pdf</span>
-          <span className="text-xs text-muted">Page 1</span>
-        </div>
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-ink text-panel">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 19V5M5 12l7-7 7 7" />
+          </svg>
+        </span>
       </div>
     </div>
   );
@@ -81,39 +125,39 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
     }
   }
 
-  const field = "w-full rounded-xl border border-line bg-panel px-3.5 py-3 text-sm placeholder:text-muted focus:border-ink/50 focus:outline-none";
+  const field = "w-full rounded-lg border border-line bg-white px-3.5 py-3 text-sm placeholder:text-muted focus:border-ink focus:outline-none";
 
   return (
-    <div className="backdrop grid min-h-screen place-items-center p-4">
-      <div className="grid w-full max-w-4xl overflow-hidden rounded-3xl bg-panel shadow-xl md:grid-cols-[1fr_1.05fr]">
-        <aside className="hidden flex-col justify-between bg-side p-10 md:flex">
-          <p className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+    <div className="auth-bg grid min-h-screen md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] md:gap-6 md:p-6">
+      <main className="flex flex-col justify-center px-6 py-10 sm:px-12 md:px-16">
+        <div className="mx-auto w-full max-w-sm">
+          <p className="mb-14 flex items-center gap-2 text-lg font-semibold tracking-tight">
             <span className="grid h-8 w-8 place-items-center rounded-lg bg-ink text-panel">
               <ChatIcon width={16} height={16} />
             </span>
             DocChat
           </p>
-          <Preview />
-          <p className="text-sm text-muted">Every answer shows the page it came from.</p>
-        </aside>
+          <h1 className="text-[2rem] font-bold leading-tight tracking-tight">{c.title}</h1>
 
-        <main className="flex flex-col justify-center p-7 sm:p-12">
-          <p className="mb-8 flex items-center gap-2 text-lg font-semibold tracking-tight md:hidden">
-            <span className="grid h-8 w-8 place-items-center rounded-lg bg-ink text-panel">
-              <ChatIcon width={16} height={16} />
-            </span>
-            DocChat
-          </p>
-          <h1 className="text-2xl font-semibold tracking-tight">{c.title}</h1>
-          <p className="mt-1.5 text-sm text-muted">{c.lead}</p>
+          <button type="button" onClick={demo} disabled={busy} className="mt-8 flex w-full items-center justify-center gap-2.5 rounded-lg border border-line bg-[#f3f1ec] py-3 text-sm font-medium shadow-sm transition-colors hover:bg-[#ebe8e1] disabled:opacity-50">
+            <FileIcon width={16} height={16} />
+            Try the demo without signing up
+          </button>
+          <p className="mt-2 text-center text-xs text-muted">Read-only, with sample documents. The first load can take a few seconds.</p>
 
-          <form onSubmit={submit} className="mt-7 space-y-4">
+          <div className="my-6 flex items-center gap-3 text-xs text-muted">
+            <span className="h-px flex-1 bg-line" />
+            OR
+            <span className="h-px flex-1 bg-line" />
+          </div>
+
+          <form onSubmit={submit} className="space-y-5">
             <label className="block text-sm">
-              <span className="mb-1.5 block font-medium">Email</span>
+              <span className="mb-1.5 block font-semibold">Email</span>
               <input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className={field} placeholder="you@example.com" />
             </label>
             <label className="block text-sm">
-              <span className="mb-1.5 block font-medium">Password</span>
+              <span className="mb-1.5 block font-semibold">Password</span>
               <input
                 type="password"
                 required
@@ -131,17 +175,10 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
                 {error}
               </p>
             )}
-            <button disabled={busy} className="w-full rounded-xl bg-ink py-3 text-sm font-medium text-panel transition-opacity disabled:opacity-50">
+            <button disabled={busy} className="w-full rounded-lg bg-[#2b2b2b] py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
               {busy ? "Please wait…" : c.button}
             </button>
           </form>
-
-          <div className="mt-5 border-t border-line pt-5">
-            <button type="button" onClick={demo} disabled={busy} className="w-full rounded-xl border border-line py-3 text-sm font-medium transition-colors hover:bg-side disabled:opacity-50">
-              Try the demo without signing up
-            </button>
-            <p className="mt-2 text-center text-xs text-muted">Read-only, with sample documents. The first load can take a few seconds.</p>
-          </div>
 
           <p className="mt-6 text-center text-sm text-muted">
             {c.switchText}{" "}
@@ -149,8 +186,10 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
               {c.switchLink}
             </Link>
           </p>
-        </main>
-      </div>
+        </div>
+      </main>
+
+      <PromptPanel />
     </div>
   );
 }

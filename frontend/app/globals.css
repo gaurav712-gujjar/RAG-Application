@@ -25,6 +25,18 @@ body {
   background: linear-gradient(135deg, #cdd9f3 0%, #e1d7f1 52%, #f4dccf 100%);
 }
 
+/* Sign-in / sign-up pages: warm paper on the left, a soft colour field on the right. */
+.auth-bg {
+  background: #fbfaf7;
+}
+.auth-art {
+  background:
+    radial-gradient(110% 60% at 50% 112%, #ffa94d 0%, rgba(255, 169, 77, 0) 62%),
+    radial-gradient(100% 55% at 50% 92%, #ff6f91 0%, rgba(255, 111, 145, 0) 72%),
+    radial-gradient(100% 50% at 50% 62%, #6f9cf5 0%, rgba(111, 156, 245, 0) 78%),
+    linear-gradient(180deg, #f9efe9 0%, #dbe6f6 40%, #b0c6f3 100%);
+}
+
 body {
   font-variant-numeric: tabular-nums; /* timings line up and don't jitter while they tick */
 }
