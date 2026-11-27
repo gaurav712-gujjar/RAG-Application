@@ -2,23 +2,32 @@
 
 import { useMemo, useState } from "react";
 import type { Thread } from "@/lib/threads";
+import ThemeToggle from "./ThemeToggle";
 import UsageBadge from "./UsageBadge";
-import { ChatIcon, CloseIcon, LogoutIcon, PlusIcon, SearchIcon, StackIcon, TrashIcon } from "./icons";
+import { ChatIcon, CloseIcon, LogoutIcon, PlusIcon, SearchIcon, SidebarIcon, StackIcon, TrashIcon } from "./icons";
+
+function initials(email: string | null) {
+  if (!email) return "?";
+  const name = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "");
+  return (name.slice(0, 2) || "?").toUpperCase();
+}
 
 export default function Sidebar({
-  threads, activeId, usageTick, docCount,
-  onSelect, onNew, onDelete, onOpenDocs, onLogout, onClose,
+  threads, activeId, usageTick, docCount, email,
+  onSelect, onNew, onDelete, onOpenDocs, onLogout, onClose, onCollapse,
 }: {
   threads: Thread[];
   activeId: string;
   usageTick: number;
   docCount: number;
+  email: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
   onOpenDocs: () => void;
   onLogout: () => void;
   onClose?: () => void; // only on phones, where the sidebar is a drawer
+  onCollapse?: () => void; // only on desktop: hide the sidebar
 }) {
   const [q, setQ] = useState("");
   const shown = useMemo(() => {
@@ -38,6 +47,11 @@ export default function Sidebar({
           </span>
           DocChat
         </p>
+        {onCollapse && (
+          <button onClick={onCollapse} aria-label="Close sidebar" title="Close sidebar" className="hidden rounded-md p-1.5 text-muted hover:bg-sel/60 hover:text-ink md:block">
+            <SidebarIcon />
+          </button>
+        )}
         {onClose && (
           <button onClick={onClose} aria-label="Close menu" className="rounded-md p-1.5 text-muted hover:bg-sel/60 hover:text-ink">
             <CloseIcon />
@@ -108,8 +122,23 @@ export default function Sidebar({
           <span className="flex-1">Documents</span>
           <span className="rounded-full bg-side px-2 py-0.5 text-xs text-muted">{docCount}</span>
         </button>
-        <div className="flex items-center justify-between gap-2 px-1">
+        <div className="px-1">
           <UsageBadge refreshKey={usageTick} />
+        </div>
+        <div className="flex items-center gap-2.5 rounded-xl px-1 py-1">
+          <span
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-live text-[13px] font-semibold text-[#2b1d00]"
+            aria-hidden
+          >
+            {initials(email)}
+          </span>
+          <div className="min-w-0 flex-1 leading-tight">
+            <p className="truncate text-sm font-medium" title={email ?? undefined}>
+              {email === "demo@docchat.app" ? "Demo account" : email ?? "Signed in"}
+            </p>
+            <p className="text-xs text-muted">{email === "demo@docchat.app" ? "Read-only" : "Signed in"}</p>
+          </div>
+          <ThemeToggle />
           <button
             onClick={onLogout}
             aria-label="Sign out"

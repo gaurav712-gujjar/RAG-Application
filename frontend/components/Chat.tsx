@@ -4,7 +4,7 @@ import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { ApiError, Doc, HistoryTurn, Latency, Mode, Source, getSuggestions, listDocs, streamChat } from "@/lib/api";
 import type { Message } from "@/lib/threads";
 import Markdown from "./Markdown";
-import { CheckIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, MenuIcon, MicIcon, PlusIcon, SendIcon } from "./icons";
+import { CheckIcon, CloseIcon, CopyIcon, FileIcon, GlobeIcon, MenuIcon, MicIcon, PlusIcon, SendIcon, SidebarIcon } from "./icons";
 
 const sec = (ms?: number) => (ms === undefined || ms === null ? "–" : `${(ms / 1000).toFixed(2)} s`);
 const STAGE_TEXT = {
@@ -190,7 +190,7 @@ function CopyButton({ text }: { text: string }) {
 
 export default function Chat({
   threadId, title, messages, update, docsVersion,
-  onUnauthorized, onAnswered, onOpenDocs, onOpenMenu, onDocCount,
+  onUnauthorized, onAnswered, onOpenDocs, onOpenMenu, onDocCount, sidebarOpen, onToggleSidebar,
 }: {
   threadId: string;
   title: string;
@@ -201,6 +201,8 @@ export default function Chat({
   onAnswered?: () => void;
   onOpenDocs: () => void;
   onOpenMenu: () => void; // phones: open the sidebar drawer
+  sidebarOpen: boolean; // desktop: is the sidebar visible
+  onToggleSidebar: () => void;
   onDocCount: (n: number) => void;
 }) {
   const [input, setInput] = useState("");
@@ -460,6 +462,11 @@ export default function Chat({
         <button onClick={onOpenMenu} aria-label="Open menu" className="rounded-md p-1.5 text-muted hover:bg-side md:hidden">
           <MenuIcon />
         </button>
+        {!sidebarOpen && (
+          <button onClick={onToggleSidebar} aria-label="Open sidebar" title="Open sidebar" className="hidden rounded-md p-1.5 text-muted hover:bg-side hover:text-ink md:block">
+            <SidebarIcon />
+          </button>
+        )}
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{title}</h1>
         <span className="shrink-0 rounded-full bg-side px-2.5 py-1 text-xs text-muted" title={MODES.find((m) => m.id === mode)!.hint}>
           {modeLabel}
@@ -570,34 +577,26 @@ export default function Chat({
       </div>
 
       <form onSubmit={submit} className="px-4 pb-4 md:px-8 md:pb-6">
-        <div className="relative mx-auto max-w-3xl rounded-2xl border border-line bg-panel p-3 shadow-sm focus-within:border-ink/40">
-          <textarea
-            ref={textRef}
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              growTextarea();
-            }}
-            onKeyDown={onKey}
-            rows={1}
-            maxLength={2000}
-            aria-label="Your question"
-            placeholder={mode === "web" ? "Ask anything, answered from the web" : "Send a message"}
-            className="block max-h-[180px] w-full resize-none bg-transparent px-1 py-1 text-[15px] placeholder:text-muted focus:outline-none"
-          />
-          <div className="mt-2 flex items-center gap-2">
+        {mode !== "web" && selected.size > 0 && (
+          <p className="mx-auto mb-2 max-w-3xl px-4 text-xs text-muted">
+            {selected.size} document{selected.size === 1 ? "" : "s"} selected
+          </p>
+        )}
+        <div className="relative mx-auto flex max-w-3xl items-end gap-1.5 rounded-[28px] border border-line bg-panel p-2 shadow-sm focus-within:border-ink/40">
             <div ref={menuRef} className="relative">
               <button
                 type="button"
                 onClick={() => setMenuOpen((o) => !o)}
                 aria-expanded={menuOpen}
                 aria-haspopup="menu"
-                className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-muted hover:bg-side hover:text-ink"
+                aria-label="Tools"
+                title="Tools"
+                className="grid h-10 w-10 place-items-center rounded-full text-muted hover:bg-side hover:text-ink"
               >
-                <PlusIcon width={17} height={17} /> Tools
+                <PlusIcon width={20} height={20} />
               </button>
               {menuOpen && (
-                <div role="menu" className="absolute bottom-11 left-0 z-20 w-80 max-w-[calc(100vw-3rem)] rounded-2xl border border-line bg-panel p-2 shadow-xl">
+                <div role="menu" className="absolute bottom-14 left-0 z-20 w-80 max-w-[calc(100vw-3rem)] rounded-2xl border border-line bg-panel p-2 shadow-xl">
                   <button
                     type="button"
                     role="menuitem"
@@ -669,9 +668,20 @@ export default function Chat({
                 </div>
               )}
             </div>
-            <span className="min-w-0 flex-1 truncate text-xs text-muted">
-              {mode !== "web" && selected.size > 0 ? `${selected.size} document${selected.size === 1 ? "" : "s"} selected` : ""}
-            </span>
+            <textarea
+              ref={textRef}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                growTextarea();
+              }}
+              onKeyDown={onKey}
+              rows={1}
+              maxLength={2000}
+              aria-label="Your question"
+              placeholder={mode === "web" ? "Ask anything, answered from the web" : "Send a message"}
+              className="block max-h-[180px] min-w-0 flex-1 resize-none self-center bg-transparent px-1 py-2 text-[15px] placeholder:text-muted focus:outline-none"
+          />
             {micOk && (
               <button
                 type="button"
@@ -679,7 +689,7 @@ export default function Chat({
                 aria-pressed={listening}
                 aria-label={listening ? "Stop voice input" : "Voice input"}
                 title={voiceLang === "hi-IN" ? "Voice input (हिन्दी)" : "Voice input (English)"}
-                className={`grid h-9 w-9 place-items-center rounded-full ${listening ? "bg-bad/15 text-bad" : "text-muted hover:bg-side hover:text-ink"}`}
+                className={`grid h-10 w-10 shrink-0 place-items-center rounded-full ${listening ? "bg-bad/15 text-bad" : "text-muted hover:bg-side hover:text-ink"}`}
               >
                 <MicIcon />
               </button>
@@ -687,11 +697,10 @@ export default function Chat({
             <button
               disabled={busy || !input.trim()}
               aria-label={busy ? "Answering" : "Send"}
-              className="grid h-9 w-9 place-items-center rounded-full bg-ink text-panel transition-opacity disabled:opacity-30"
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-ink text-panel transition-opacity disabled:opacity-30"
             >
               {busy ? <span className="seg-live h-2 w-4 rounded-full" /> : <SendIcon />}
             </button>
-          </div>
         </div>
       </form>
       {passage && <PassageDialog s={passage} onClose={() => setPassage(null)} />}

@@ -100,6 +100,8 @@ export async function tryDemo() {
   setToken(data.access_token);
 }
 
+export const getMe = () => request<{ id: string; email: string }>("/auth/me");
+
 export const getUsage = () => request<Usage>("/usage");
 
 export const listDocs = () => request<Doc[]>("/documents");

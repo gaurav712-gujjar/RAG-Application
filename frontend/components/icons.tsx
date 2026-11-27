@@ -22,3 +22,6 @@ export const LogoutIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><path d="M
 export const ChatIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" /></Svg>;
 export const StackIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><path d="m12 3 9 5-9 5-9-5z" /><path d="m3 13 9 5 9-5" /></Svg>;
 export const MicIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></Svg>;
+export const SunIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></Svg>;
+export const MoonIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" /></Svg>;
+export const SidebarIcon = (p: SVGProps<SVGSVGElement>) => <Svg {...p}><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></Svg>;

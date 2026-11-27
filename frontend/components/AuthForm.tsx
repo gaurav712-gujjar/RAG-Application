@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { authenticate, tryDemo } from "@/lib/api";
+import ThemeToggle from "./ThemeToggle";
 import { ChatIcon, FileIcon } from "./icons";
 
 const COPY = {
@@ -125,11 +126,12 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
     }
   }
 
-  const field = "w-full rounded-lg border border-line bg-white px-3.5 py-3 text-sm placeholder:text-muted focus:border-ink focus:outline-none";
+  const field = "w-full rounded-lg border border-line bg-white dark:bg-panel px-3.5 py-3 text-sm placeholder:text-muted focus:border-ink focus:outline-none";
 
   return (
     <div className="auth-bg grid min-h-screen md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] md:gap-6 md:p-6">
-      <main className="flex flex-col justify-center px-6 py-10 sm:px-12 md:px-16">
+      <main className="relative flex flex-col justify-center px-6 py-10 sm:px-12 md:px-16">
+        <ThemeToggle className="absolute right-4 top-4" />
         <div className="mx-auto w-full max-w-sm">
           <p className="mb-14 flex items-center gap-2 text-lg font-semibold tracking-tight">
             <span className="grid h-8 w-8 place-items-center rounded-lg bg-ink text-panel">
@@ -139,7 +141,7 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
           </p>
           <h1 className="text-[2rem] font-bold leading-tight tracking-tight">{c.title}</h1>
 
-          <button type="button" onClick={demo} disabled={busy} className="mt-8 flex w-full items-center justify-center gap-2.5 rounded-lg border border-line bg-[#f3f1ec] py-3 text-sm font-medium shadow-sm transition-colors hover:bg-[#ebe8e1] disabled:opacity-50">
+          <button type="button" onClick={demo} disabled={busy} className="mt-8 flex w-full items-center justify-center gap-2.5 rounded-lg border border-line bg-[#f3f1ec] dark:bg-panel py-3 text-sm font-medium shadow-sm transition-colors hover:bg-[#ebe8e1] dark:hover:bg-sel disabled:opacity-50">
             <FileIcon width={16} height={16} />
             Try the demo without signing up
           </button>
@@ -175,7 +177,7 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
                 {error}
               </p>
             )}
-            <button disabled={busy} className="w-full rounded-lg bg-[#2b2b2b] py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
+            <button disabled={busy} className="w-full rounded-lg bg-[#2b2b2b] py-3 text-sm font-medium text-white dark:bg-ink dark:text-bg transition-opacity hover:opacity-90 disabled:opacity-50">
               {busy ? "Please wait…" : c.button}
             </button>
           </form>
