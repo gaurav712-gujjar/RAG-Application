@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { authenticate } from "@/lib/api";
+import { authenticate, tryDemo } from "@/lib/api";
 import { ChatIcon, FileIcon } from "./icons";
 
 const COPY = {
@@ -69,6 +69,18 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
     }
   }
 
+  async function demo() {
+    setBusy(true);
+    setError(null);
+    try {
+      await tryDemo();
+      router.replace("/");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start the demo");
+      setBusy(false);
+    }
+  }
+
   const field = "w-full rounded-xl border border-line bg-panel px-3.5 py-3 text-sm placeholder:text-muted focus:border-ink/50 focus:outline-none";
 
   return (
@@ -123,6 +135,13 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
               {busy ? "Please wait…" : c.button}
             </button>
           </form>
+
+          <div className="mt-5 border-t border-line pt-5">
+            <button type="button" onClick={demo} disabled={busy} className="w-full rounded-xl border border-line py-3 text-sm font-medium transition-colors hover:bg-side disabled:opacity-50">
+              Try the demo without signing up
+            </button>
+            <p className="mt-2 text-center text-xs text-muted">Read-only, with sample documents. The first load can take a few seconds.</p>
+          </div>
 
           <p className="mt-6 text-center text-sm text-muted">
             {c.switchText}{" "}

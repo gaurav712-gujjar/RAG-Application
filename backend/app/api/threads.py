@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import get_current_user
 from app.core.db import get_session
+from app.core.demo import is_demo
 from app.models import ChatThread, User
 
 router = APIRouter(prefix="/threads", tags=["threads"])
@@ -36,6 +37,8 @@ def _out(t: ChatThread) -> ThreadOut:
 
 @router.get("", response_model=list[ThreadOut])
 async def list_threads(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    if is_demo(user):
+        return []  # the demo account is shared: its chats are never stored
     rows = await session.execute(
         select(ChatThread).where(ChatThread.user_id == user.id).order_by(ChatThread.updated_at.desc()).limit(MAX_THREADS)
     )
@@ -49,6 +52,8 @@ async def save_thread(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    if is_demo(user):
+        return ThreadOut(id=thread_id, title=body.title, updated_at=dt.datetime.now(dt.timezone.utc), messages=body.messages)
     if not (8 <= len(thread_id) <= 36):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid chat id")
     if len(json.dumps(body.messages, ensure_ascii=False)) > MAX_BYTES:
@@ -68,6 +73,8 @@ async def save_thread(
 async def delete_thread(
     thread_id: str, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
 ):
+    if is_demo(user):
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     await session.execute(delete(ChatThread).where(ChatThread.id == thread_id, ChatThread.user_id == user.id))
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

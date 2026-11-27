@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     rate_limit_chat_per_min: int = 20
     rate_limit_upload_per_min: int = 10
     rate_limit_auth_per_min: int = 10  # per client IP (login/register)
+    demo_enabled: bool = True  # POST /auth/demo: a shared read-only account with sample documents
 
     # --- LLM (Groq) ---
     groq_api_key: str = ""

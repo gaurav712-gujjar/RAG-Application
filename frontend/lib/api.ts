@@ -95,6 +95,11 @@ export async function authenticate(mode: "login" | "register", email: string, pa
   setToken(data.access_token);
 }
 
+export async function tryDemo() {
+  const data = await request<{ access_token: string }>("/auth/demo", { method: "POST" });
+  setToken(data.access_token);
+}
+
 export const getUsage = () => request<Usage>("/usage");
 
 export const listDocs = () => request<Doc[]>("/documents");
