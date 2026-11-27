@@ -1,6 +1,7 @@
 """Evaluate the RAG pipeline against the golden set.
 
     python -m evals.run_eval --fast                       # seconds, no downloads (pipeline plumbing check)
+    python -m evals.run_eval --dense-only                 # same, without BM25 (compare with the hybrid run)
     python -m evals.run_eval                              # real models: bge-m3 (+ reranker) retrieval quality
     python -m evals.run_eval --generate                   # + answers from Groq (needs GROQ_API_KEY)
     python -m evals.run_eval --generate --ragas           # + RAGAS judge scores (token-hungry)
@@ -44,17 +45,20 @@ async def run(args) -> dict:
         embedder, reranker = HashingEmbedder(), None
         settings = eval_settings(relevance_threshold=0.05)  # hashed cosines are tiny; see module docstring
     else:
-        from app.embeddings.embedder import SentenceTransformerEmbedder
+        from app.embeddings.factory import make_embedder
         from app.retrieval.rerank import CrossEncoderReranker
 
         base = get_settings()
-        embedder = SentenceTransformerEmbedder(base.embedding_model, base.embedding_dim)
-        await embedder.warmup()
+        embedder = make_embedder(base)  # same provider as the app: EMBEDDING_PROVIDER=gemini|fastembed|local
+        if hasattr(embedder, "warmup"):
+            await embedder.warmup()
         reranker = None
         if base.rerank_enabled and not args.no_rerank:
             reranker = CrossEncoderReranker(base.reranker_model)
             await reranker.warmup()
         settings = eval_settings()
+    if args.dense_only:
+        settings = settings.model_copy(update={"hybrid_enabled": False})
 
     index = await build_index(embedder, reranker, settings)
     results, hits_by_id = await run_retrieval(index, qa)
@@ -126,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--fast", action="store_true", help="hashing embedder, no model downloads (plumbing check only)")
     ap.add_argument("--no-rerank", action="store_true")
+    ap.add_argument("--dense-only", action="store_true", help="turn BM25/hybrid off, to compare against hybrid search")
     ap.add_argument("--generate", action="store_true", help="also generate answers with Groq")
     ap.add_argument("--ragas", action="store_true", help="also run RAGAS judge metrics (implies --generate)")
     ap.add_argument("--judge-model", default="llama-3.3-70b-versatile")

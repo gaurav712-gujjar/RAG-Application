@@ -291,6 +291,16 @@ cd backend && pip install -r requirements-dev.txt && pytest      # 161 tests
 python -m evals.run_eval                                         # golden-set retrieval/answer eval
 GEMINI_API_KEY=… python -m evals.hinglish_embed_check            # Hinglish embedding comparison
 ```
+### Measure retrieval quality (hit-rate / MRR)
+
+```bash
+cd backend
+# uses the same embedder as the app (EMBEDDING_PROVIDER in .env)
+python -m evals.run_eval                 # hybrid (dense + BM25)
+python -m evals.run_eval --dense-only    # dense only, to compare
+```
+Reports `hit_at_1`, `hit_at_3`, `mrr` and abstain rates on the 20-question golden set (English, Hindi, keyword, semantic).
+
 CI runs tests on every push; `eval.yml` runs the evaluation.
 
 ## 14. Security notes

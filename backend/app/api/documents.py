@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.deps import get_current_user
 from app.core.config import get_settings
 from app.core.db import SessionLocal, get_session
+from app.core.demo import forbid_demo
 from app.core.limits import limit_upload
 from app.models import DocStage, DocStatus, Document, User
 from app.parsers.files import UnsupportedFile, detect_file_type, sanitize_filename
@@ -69,6 +70,7 @@ async def upload_document(
     """Validate + store the file, then ingest.
     - ingest_mode=celery: returns 202 with status "uploaded"; a worker does the rest.
     - ingest_mode=inline: processes before returning 201 (dev/tests)."""
+    forbid_demo(user)
     state = request.app.state
     data = await _read_limited(file, settings.max_upload_mb * 1024 * 1024)
     if not data:
@@ -151,6 +153,7 @@ async def delete_document(
 ):
     """Cascade: vectors -> stored file -> DB row. Vectors go first so a failure leaves the
     document intact and the delete can simply be retried."""
+    forbid_demo(user)
     doc = (
         await session.execute(
             select(Document).where(Document.id == doc_id, Document.user_id == user.id)

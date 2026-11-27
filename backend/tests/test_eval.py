@@ -131,7 +131,7 @@ def test_cli_fast_mode_writes_a_report_and_gates_control_the_exit_code(tmp_path)
     out = tmp_path / "r.json"
     assert main(["--fast", "--out", str(out), "--min", "hit_at_3=0.5"]) == 0
     report = json.loads(out.read_text(encoding="utf-8"))
-    assert report["config"]["mode"] == "fast" and report["retrieval"]["n_answerable"] == 16
+    assert report["config"]["mode"] == "fast" and report["retrieval"]["n_answerable"] == 28
     assert report["gates"] == {"hit_at_3": 0.5} and report["failures"] == []
 
     assert main(["--fast", "--out", str(out), "--min", "hit_at_3=0.999"]) == 1          # below the bar
