@@ -3,7 +3,8 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-/** Renders an answer as Markdown (headings, lists, bold, tables). Links always open in a new tab. */
+/** Models sometimes put <br> in table cells; Markdown would show it as text, so it becomes "; ".
+ * Renders an answer as Markdown (headings, lists, bold, tables). Links always open in a new tab. */
 export default function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
@@ -18,7 +19,7 @@ export default function Markdown({ text }: { text: string }) {
           ),
         }}
       >
-        {text}
+        {text.replace(/<br\s*\/?>/gi, "; ")}
       </ReactMarkdown>
     </div>
   );
