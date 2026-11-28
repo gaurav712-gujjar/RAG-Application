@@ -27,6 +27,7 @@ class Settings(BaseSettings):
 
     # --- embeddings ---
     gemini_api_key: str = ""
+    gemini_embed_per_min: int = 90  # texts per minute sent to Gemini (free tier limit; 0 = no pacing)
     tavily_api_key: str = ""  # web search via Tavily; empty = DuckDuckGo only
     sentry_dsn: str = ""  # empty = no error reporting
     admin_token: str = ""  # enables GET /admin/usage (sent as X-Admin-Token); empty = endpoint is off
