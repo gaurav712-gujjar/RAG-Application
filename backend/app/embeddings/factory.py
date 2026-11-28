@@ -5,7 +5,10 @@ def make_embedder(settings):
     if provider == "gemini":
         from app.embeddings.gemini import GeminiEmbedder
 
-        return GeminiEmbedder(settings.gemini_api_key, settings.embedding_model, settings.embedding_dim)
+        return GeminiEmbedder(
+            settings.gemini_api_key, settings.embedding_model, settings.embedding_dim,
+            per_minute=settings.gemini_embed_per_min,
+        )
 
     if provider == "fastembed":
         from app.embeddings.fast import FastEmbedEmbedder
