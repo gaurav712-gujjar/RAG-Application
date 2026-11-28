@@ -29,6 +29,22 @@ class LLMCompletion:
     completion_tokens: int | None = None
 
 
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: str  # JSON text, exactly as the model produced it
+
+
+@dataclass
+class ToolTurn:
+    """One non-streaming model turn that may ask for tools."""
+    text: str
+    tool_calls: list[ToolCall]
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
 class LLM(Protocol):
     def stream(
         self, messages: list[dict], model: str, max_tokens: int, temperature: float
@@ -78,6 +94,38 @@ class GroqLLM:
                 usage = res.usage
                 return LLMCompletion(
                     text=(res.choices[0].message.content or "").strip(),
+                    prompt_tokens=getattr(usage, "prompt_tokens", None),
+                    completion_tokens=getattr(usage, "completion_tokens", None),
+                )
+            except Exception as exc:
+                if not _is_retryable(exc):
+                    raise
+                if attempt >= self.max_retries:
+                    raise LLMUnavailable(str(exc)) from exc
+                await asyncio.sleep(min(8.0, 0.5 * (2**attempt)) + random.uniform(0, 0.25))
+                attempt += 1
+
+    async def complete_tools(
+        self, messages: list[dict], model: str, tools: list[dict] | None, max_tokens: int, temperature: float
+    ) -> ToolTurn:
+        """One non-streaming turn. With `tools` the model may answer with tool calls instead of text."""
+        if self.client is None:
+            raise LLMUnavailable("GROQ_API_KEY is not set")
+        kwargs = {"tools": tools, "tool_choice": "auto"} if tools else {}
+        attempt = 0
+        while True:
+            try:
+                res = await self.client.chat.completions.create(
+                    model=model, messages=messages, max_tokens=max_tokens, temperature=temperature,
+                    extra_body=self.extra_body, **kwargs,
+                )
+                msg = res.choices[0].message
+                calls = [
+                    ToolCall(c.id, c.function.name, c.function.arguments or "{}") for c in (msg.tool_calls or [])
+                ]
+                usage = res.usage
+                return ToolTurn(
+                    text=(msg.content or "").strip(), tool_calls=calls,
                     prompt_tokens=getattr(usage, "prompt_tokens", None),
                     completion_tokens=getattr(usage, "completion_tokens", None),
                 )

@@ -9,7 +9,9 @@ from pydantic import BaseModel, Field
 
 from app.auth.deps import get_current_user
 from app.core import metrics
+from app.agent.loop import AgentRun, run_agent
 from app.core.config import get_settings
+from app.core.demo import is_demo
 from app.core.limits import QuotaExceeded, limit_chat
 from app.core.tracing import SpanKind, fail, trace, tracer
 from app.llm.groq_client import LLMUnavailable
@@ -35,8 +37,9 @@ class Turn(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     history: list[Turn] = Field(default_factory=list, max_length=20)
-    # docs = only your documents; docs_web = documents, then the web if nothing is found; web = web only
-    mode: Literal["docs", "docs_web", "web"] = "docs"
+    # docs = only your documents; docs_web = documents, then the web if nothing is found; web = web only;
+    # agent = the model chooses tools (documents, web, calculator) over several steps
+    mode: Literal["docs", "docs_web", "web", "agent"] = "docs"
     doc_ids: list[str] | None = Field(default=None, max_length=50)  # limit the search to these documents
     # NOTE: no user_id here on purpose. Identity comes only from the JWT.
 
@@ -55,6 +58,8 @@ def _est_tokens(chars: int) -> int:
 
 @router.post("/chat", dependencies=[Depends(limit_chat)])
 async def chat(req: ChatRequest, request: Request, user: User = Depends(get_current_user)):
+    if req.mode == "agent" and is_demo(user):  # the demo account shares one small token quota
+        raise HTTPException(403, "Agent mode is not available in the demo. Create a free account to use it.")
     # TTFT starts when the request arrived (set by the middleware), so auth and rate limiting count.
     t0 = getattr(request.state, "t0", None) or time.perf_counter()
     state = request.app.state
@@ -84,6 +89,13 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
                 f"Resets in {hours}h {rem // 60}m.",
                 headers={"Retry-After": str(e.retry_after)},
             )
+
+    if req.mode == "agent" and chit is None:
+        return StreamingResponse(
+            _agent_events(req, state, user_id, quota, t0),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     async def events():
         # Spans are created and ended by hand (not as context managers): this generator yields
@@ -307,3 +319,47 @@ async def chat(req: ChatRequest, request: Request, user: User = Depends(get_curr
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+async def _agent_events(req: ChatRequest, state, user_id: str, quota, t0: float):
+    """Agent mode stream: stage -> (tool, sources)* -> ttft -> token -> done. Tokens from every model
+    call in the run are charged to the quota, even if the client disconnects part-way."""
+    run = AgentRun()
+    outcome = "aborted"
+    try:
+        yield sse("stage", {"name": "agent"})
+        history = trim_history(req.history, settings.history_turns)
+        text = ""
+        async for ev in run_agent(
+            run=run, llm=state.llm, state=state, settings=settings, user_id=user_id,
+            question=req.question, history=history, doc_ids=req.doc_ids,
+        ):
+            if ev["type"] == "tool":
+                yield sse("tool", {k: ev[k] for k in ("name", "label", "detail")})
+            elif ev["type"] == "sources":
+                yield sse("sources", ev["sources"])
+            else:
+                text = ev["text"]
+        ttft_ms = _ms(t0)
+        metrics.CHAT_TTFT.labels("llm").observe(ttft_ms / 1000)
+        yield sse("ttft", {"ttft_ms": ttft_ms, "retrieval_ms": 0, "cached": False})
+        yield sse("token", {"t": text})
+        outcome = "ok"
+        yield sse(
+            "done",
+            {"ttft_ms": ttft_ms, "retrieval_ms": 0, "rerank_ms": 0, "total_ms": _ms(t0), "model": run.model,
+             "prompt_tokens": run.tokens, "completion_tokens": 0, "cached": False, "answer_source": "agent",
+             "web_available": False, "agent_steps": run.steps},
+        )
+    except LLMUnavailable:
+        outcome = "llm_unavailable"
+        logger.exception("LLM unavailable (agent)")
+        yield sse("error", {"message": "The AI service is temporarily unavailable. Please try again."})
+    except Exception:
+        outcome = "error"
+        logger.exception("agent chat failed")
+        yield sse("error", {"message": "Something went wrong. Please try again."})
+    finally:
+        if quota is not None and run.tokens:
+            await quota.add(user_id, run.tokens)
+        metrics.CHAT_REQUESTS.labels(outcome).inc()

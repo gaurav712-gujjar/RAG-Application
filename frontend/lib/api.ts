@@ -39,7 +39,7 @@ export type Source = {
   text?: string; // the passage the answer used (documents only)
 };
 
-export type Mode = "docs" | "docs_web" | "web";
+export type Mode = "docs" | "docs_web" | "web" | "agent";
 
 export type Considered = { filename: string; page: number; score: number; kept: boolean };
 

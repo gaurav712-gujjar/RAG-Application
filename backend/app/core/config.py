@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     llm_model_fast: str = "llama-3.1-8b-instant"
     llm_model_strong: str = "llama-3.3-70b-versatile"
     max_output_tokens: int = 400
+    agent_max_steps: int = 4  # tool rounds before the agent must answer
+    agent_model: str = ""  # empty = llm_model_strong
+    agent_max_output_tokens: int = 700
     temperature: float = 0.1
     history_turns: int = 2
     llm_max_retries: int = 3
