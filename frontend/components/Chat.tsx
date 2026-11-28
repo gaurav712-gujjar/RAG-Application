@@ -11,12 +11,14 @@ const STAGE_TEXT = {
   searching: "Searching your documents",
   web: "Searching the web",
   writing: "Writing the answer",
+  agent: "Working on it",
 } as const;
 
 const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "docs", label: "Documents", hint: "Answers only from your files" },
   { id: "docs_web", label: "Documents + Web", hint: "Your files first, the web if they don’t cover it" },
   { id: "web", label: "Web", hint: "Search the web only" },
+  { id: "agent", label: "Agent", hint: "Plans its own steps: searches files and the web, calculates" },
 ];
 const MODE_KEY = "docchat_mode";
 const VOICE_KEY = "docchat_voice";
@@ -99,6 +101,28 @@ function Waiting({ stage, startedAt }: { stage: keyof typeof STAGE_TEXT; started
       <span className="seg-live inline-block h-2 w-6 rounded-full" aria-hidden />
       {STAGE_TEXT[stage]}… {((now - startedAt) / 1000).toFixed(1)} s
     </p>
+  );
+}
+
+/** What the agent did, in order: one line per tool call. */
+function AgentSteps({ steps, running }: { steps: NonNullable<Message["steps"]>; running: boolean }) {
+  return (
+    <ul className="mb-3 space-y-1.5" aria-label="Agent steps">
+      {steps.map((s, i) => {
+        const last = i === steps.length - 1;
+        return (
+          <li key={i} className="flex items-center gap-2 text-sm text-muted">
+            {running && last ? (
+              <span className="seg-live inline-block h-2 w-4 shrink-0 rounded-full" aria-hidden />
+            ) : (
+              <CheckIcon width={14} height={14} className="shrink-0 text-done" />
+            )}
+            <span className="font-medium text-ink/80">{s.label}</span>
+            {s.detail && <span className="min-w-0 truncate">“{s.detail}”</span>}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -230,7 +254,7 @@ export default function Chat({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(MODE_KEY);
-      if (saved === "docs" || saved === "docs_web" || saved === "web") setMode(saved);
+      if (saved === "docs" || saved === "docs_web" || saved === "web" || saved === "agent") setMode(saved);
     } catch {
       /* ignore */
     }
@@ -394,7 +418,7 @@ export default function Chat({
       { role: "user", content: question },
       {
         role: "assistant", content: "", streaming: true, latency: {}, question,
-        stage: useMode === "web" ? "web" : "searching", startedAt: t0,
+        stage: useMode === "web" ? "web" : useMode === "agent" ? "agent" : "searching", startedAt: t0,
       },
     ]);
 
@@ -403,6 +427,8 @@ export default function Chat({
       for await (const { event, data } of streamChat(question, history, abortRef.current.signal, { mode: useMode, docIds: ids })) {
         if (event === "stage") {
           patchLast((m) => ({ ...m, stage: data.name }));
+        } else if (event === "tool") {
+          patchLast((m) => ({ ...m, steps: [...(m.steps ?? []), data] }));
         } else if (event === "sources") {
           patchLast((m) => ({ ...m, sources: data }));
         } else if (event === "ttft") {
@@ -512,6 +538,7 @@ export default function Chat({
               </div>
             ) : (
               <div key={i} className="min-w-0">
+                {m.steps && m.steps.length > 0 && <AgentSteps steps={m.steps} running={!!m.streaming && !m.content} />}
                 {!m.content && m.streaming && !m.error && m.stage && m.startedAt !== undefined && (
                   <Waiting stage={m.stage} startedAt={m.startedAt} />
                 )}

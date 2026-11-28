@@ -32,6 +32,7 @@ Live stack runs on a **100% free, no-card** setup: Vercel + Render + Neon + Qdra
 - **Live pipeline view**: uploaded → parsing → splitting → embedding → indexing → done, with timings.
 - **Chat with citations**: answers stream token by token; source cards open the exact passage.
 - **Three modes**: `docs` (only your files), `docs_web` (files, then web if not found), `web` (web only).
+- **Agent mode**: the model plans its own steps with tools (search documents, search web, calculator, list documents), up to 4 rounds, and shows each step.
 - **Document filter**: ask against one or several chosen documents.
 - **Hindi / Hinglish aware**: replies in the language you wrote in.
 - **Suggested questions** generated per document.

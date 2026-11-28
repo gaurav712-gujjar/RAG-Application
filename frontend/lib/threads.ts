@@ -8,11 +8,12 @@ export type Message = {
   content: string;
   sources?: Source[];
   latency?: Latency;
-  stage?: "searching" | "web" | "writing";
+  stage?: "searching" | "web" | "writing" | "agent";
   startedAt?: number;
   question?: string;
-  answerSource?: "docs" | "web";
+  answerSource?: "docs" | "web" | "agent";
   webAvailable?: boolean;
+  steps?: { name: string; label: string; detail: string }[]; // agent mode: tools the model used
   error?: string;
   streaming?: boolean;
 };
